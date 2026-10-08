@@ -1,0 +1,6 @@
+# XcodeGen と CocoaPods が作るもの（GitHub Actions で毎回作り直す）
+Orbit.xcodeproj/
+Orbit.xcworkspace/
+Pods/
+Podfile.lock
+build/

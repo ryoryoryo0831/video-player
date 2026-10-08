@@ -1,0 +1,48 @@
+# Xcode のプロジェクトは GitHub Actions（Mac）で XcodeGen を使ってこのファイルから作る
+name: Orbit
+options:
+  bundleIdPrefix: com.ryose
+  deploymentTarget:
+    iOS: "16.0"
+targets:
+  Orbit:
+    type: application
+    platform: iOS
+    sources:
+      - Orbit
+    info:
+      path: Orbit/Info.plist
+      properties:
+        CFBundleDisplayName: Orbit
+        CFBundleName: Orbit
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen:
+          UIColorName: ""
+        # 画面を消しても音声を続ける
+        UIBackgroundModes: [audio]
+        # 「ファイル」アプリやパソコンから、Orbit のフォルダに動画を入れられるようにする
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        NSLocalNetworkUsageDescription: 同じネットワークの NAS や DLNA サーバーの動画を再生するために使います。
+        UIApplicationSupportsIndirectInputEvents: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIStatusBarStyle: UIStatusBarStyleLightContent
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ryose.orbit
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_VERSION: "5.0"
+        ENABLE_BITCODE: NO
+        GENERATE_INFOPLIST_FILE: NO

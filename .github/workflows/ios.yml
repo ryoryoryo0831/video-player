@@ -1,0 +1,72 @@
+name: iOS IPA ビルド
+
+# iPhone 版（ios/ フォルダ）を Mac でビルドし、SideStore などで入れられる .ipa を作る。
+# 署名は SideStore が入れるときに行うので、ここでは署名しない
+on:
+  push:
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Xcode のプロジェクトを作る
+        run: |
+          brew install xcodegen
+          xcodegen generate
+          pod install
+
+      - name: ビルド
+        run: |
+          V="1.0.${{ github.run_number }}"
+          xcodebuild archive \
+            -workspace Orbit.xcworkspace \
+            -scheme Orbit \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/Orbit.xcarchive \
+            MARKETING_VERSION="$V" \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            | tail -n 200
+          test -d build/Orbit.xcarchive/Products/Applications/Orbit.app
+
+      - name: IPA にまとめる
+        run: |
+          V="1.0.${{ github.run_number }}"
+          mkdir -p build/Payload
+          cp -R build/Orbit.xcarchive/Products/Applications/Orbit.app build/Payload/
+          (cd build && zip -qry "$GITHUB_WORKSPACE/Orbit-iOS-$V.ipa" Payload)
+          ls -la "$GITHUB_WORKSPACE"/Orbit-iOS-*.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Orbit-iOS-ipa
+          path: Orbit-iOS-*.ipa
+
+      # 公開は main だけ。Android 版の「最新版」ページが変わらないよう、最新版にはしない
+      - name: リリースとして公開
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ios-build-${{ github.run_number }}
+          name: Orbit iOS 1.0.${{ github.run_number }}
+          body: |
+            iPhone 版です。パソコンの SideStore / AltStore / Sideloadly で **Orbit-iOS-1.0.${{ github.run_number }}.ipa** を入れてください。
+            （Android の方はこのページではなく、最新版の Orbit-*.apk を使ってください）
+          files: Orbit-iOS-*.ipa
+          make_latest: false
