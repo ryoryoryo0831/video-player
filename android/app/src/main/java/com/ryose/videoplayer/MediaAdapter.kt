@@ -10,7 +10,6 @@ import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import coil.dispose
 import coil.load
-import coil.request.videoFrameMillis
 import com.google.android.material.progressindicator.LinearProgressIndicator
 import java.io.File
 
@@ -104,6 +103,28 @@ class MediaAdapter(
         }
     }
 
+    /** 視聴位置のバーだけを更新する（サムネイルなどは読み込み直さない） */
+    fun refreshProgress() = notifyItemRangeChanged(0, itemCount, PAYLOAD_PROGRESS)
+
+    override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int, payloads: MutableList<Any>) {
+        val row = data.getOrNull(position)
+        if (payloads.isNotEmpty() && payloads.all { it == PAYLOAD_PROGRESS }) {
+            if (holder is MediaHolder && row is Row.Media) bindProgress(holder, row.item)
+            return
+        }
+        onBindViewHolder(holder, position)
+    }
+
+    private fun bindProgress(holder: MediaHolder, item: PlaylistItem) {
+        val pos = resume.get(item.key)
+        if (pos > 0 && item.durationMs > 0) {
+            holder.progress.visibility = View.VISIBLE
+            holder.progress.progress = (pos * 1000 / item.durationMs).toInt().coerceIn(0, 1000)
+        } else {
+            holder.progress.visibility = View.GONE
+        }
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
         holder.itemView.setOnClickListener { onClick(holder.bindingAdapterPosition) }
@@ -144,20 +165,13 @@ class MediaAdapter(
                         fallback(R.drawable.ic_music_note)
                     }
                 } else {
-                    holder.thumb.load(item.path?.let { File(it) } ?: item.uri) {
-                        videoFrameMillis(1000)
+                    holder.thumb.load(VideoThumb(item.path, item.uri)) {
                         placeholder(R.drawable.ic_movie)
                         error(R.drawable.ic_movie)
                     }
                 }
 
-                val pos = resume.get(item.key)
-                if (pos > 0 && item.durationMs > 0) {
-                    holder.progress.visibility = View.VISIBLE
-                    holder.progress.progress = (pos * 1000 / item.durationMs).toInt().coerceIn(0, 1000)
-                } else {
-                    holder.progress.visibility = View.GONE
-                }
+                bindProgress(holder, item)
 
                 val drag = dragListener
                 holder.dragHandle.visibility = if (drag != null) View.VISIBLE else View.GONE
@@ -167,5 +181,9 @@ class MediaAdapter(
                 }
             }
         }
+    }
+
+    private companion object {
+        const val PAYLOAD_PROGRESS = "progress"
     }
 }

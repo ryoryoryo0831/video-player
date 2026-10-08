@@ -14,9 +14,12 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
+import android.provider.MediaStore
 import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -30,6 +33,8 @@ class VideosFragment : BaseListFragment() {
     private var shownCount = 0
     private var query = ""
     private var sort = Sort.DATE
+    /** 絞り込み・並べ替えの処理（新しく始めたら前のものは取り消す） */
+    private var filterJob: Job? = null
     private var loaded = false
     private var loadedWithAccess = false
     /** フォルダ別表示で開いているフォルダ（null ならフォルダの一覧） */
@@ -47,6 +52,11 @@ class VideosFragment : BaseListFragment() {
         requireActivity().addMenuProvider(menuProvider, viewLifecycleOwner, Lifecycle.State.RESUMED)
         requireActivity().onBackPressedDispatcher.addCallback(viewLifecycleOwner, backCallback)
         openedFolder = savedInstanceState?.getString(KEY_FOLDER)
+        sort = runCatching { Sort.valueOf(AppSettings.videosSort(requireContext())) }.getOrDefault(Sort.DATE)
+        // 動画が増えた・消えたら自動で読み込み直す
+        viewLifecycleOwner.lifecycle.addObserver(
+            MediaWatcher(requireContext().applicationContext, MediaStore.Video.Media.EXTERNAL_CONTENT_URI) { if (loaded) load() }
+        )
 
         // 「すべて」「フォルダ別」の切り替え
         val chips = view.findViewById<ChipGroup>(R.id.chips)
@@ -130,9 +140,12 @@ class VideosFragment : BaseListFragment() {
         }
         if (!loaded) loading.visibility = View.VISIBLE
         viewLifecycleOwner.lifecycleScope.launch {
-            all = withContext(Dispatchers.IO) { MediaFiles.queryAllVideos(ctx) }
-            // 以前のバージョンで保存した「続きから再生」の位置を引き継ぐ
-            all.forEach { v -> v.path?.let { resume.migrate(v.uri.toString(), it) } }
+            all = withContext(Dispatchers.IO) {
+                MediaFiles.queryAllVideos(ctx).also { videos ->
+                    // 以前のバージョンで保存した「続きから再生」の位置を引き継ぐ
+                    videos.forEach { v -> v.path?.let { resume.migrate(v.uri.toString(), it) } }
+                }
+            }
             loaded = true
             applyFilter()
         }
@@ -140,8 +153,31 @@ class VideosFragment : BaseListFragment() {
 
     private fun folderOf(v: Video) = v.path?.let { File(it).parent } ?: v.folder
 
-    private fun applyFilter() {
+    /**
+     * 検索・並べ替えをして一覧に表示する。数千本あっても入力がもたつかないように、画面の処理とは別のところで行う
+     * debounce が true（検索の入力中）なら、入力が止まるまで少し待つ
+     */
+    private fun applyFilter(debounce: Boolean = false, onShown: (() -> Unit)? = null) {
         val ctx = context ?: return
+        val all = all
+        val query = query
+        val sort = sort
+        val folder = openedFolder
+        val byFolder = AppSettings.videosByFolder(ctx)
+        filterJob?.cancel()
+        filterJob = viewLifecycleOwner.lifecycleScope.launch {
+            if (debounce) delay(200)
+            val rows = withContext(Dispatchers.Default) { buildRows(ctx, all, query, sort, folder, byFolder) }
+            shownCount = rows.size
+            backCallback.isEnabled = isResumed && folder != null
+            showRows(rows, getString(R.string.no_videos))
+            onShown?.invoke()
+        }
+    }
+
+    private fun buildRows(
+        ctx: android.content.Context, all: List<Video>, query: String, sort: Sort, folder: String?, byFolder: Boolean,
+    ): List<Row> {
         val matched = all.filter {
             query.isBlank() || it.title.contains(query, ignoreCase = true) || it.folder.contains(query, ignoreCase = true)
         }
@@ -152,10 +188,9 @@ class VideosFragment : BaseListFragment() {
         }
         fun mediaRow(v: Video) = Row.Media(v.toItem(), "${v.folder} · ${Formatter.formatShortFileSize(ctx, v.size)}")
 
-        val folder = openedFolder
-        val rows: List<Row> = when {
+        return when {
             folder != null -> sorted(matched.filter { folderOf(it) == folder }).map(::mediaRow)
-            AppSettings.videosByFolder(ctx) -> matched.groupBy { folderOf(it) }.entries
+            byFolder -> matched.groupBy { folderOf(it) }.entries
                 .sortedWith(compareBy(NaturalOrder) { File(it.key).name })
                 .map { (dir, videos) ->
                     val total = videos.sumOf { it.durationMs }
@@ -164,16 +199,13 @@ class VideosFragment : BaseListFragment() {
                 }
             else -> sorted(matched).map(::mediaRow)
         }
-        shownCount = rows.size
-        backCallback.isEnabled = isResumed && folder != null
-        showRows(rows, getString(R.string.no_videos))
     }
 
     private fun closeFolder() {
         openedFolder = null
-        applyFilter()
-        savedScroll?.let { list.layoutManager?.onRestoreInstanceState(it) }
+        val scroll = savedScroll
         savedScroll = null
+        applyFilter { scroll?.let { list.layoutManager?.onRestoreInstanceState(it) } }
     }
 
     override fun onRowClick(position: Int) {
@@ -181,8 +213,7 @@ class VideosFragment : BaseListFragment() {
             is Row.Folder -> row.id?.removePrefix("vfolder:")?.let { dir ->
                 savedScroll = list.layoutManager?.onSaveInstanceState()
                 openedFolder = dir
-                applyFilter()
-                list.scrollToPosition(0)
+                applyFilter { list.scrollToPosition(0) }
             }
             is Row.Media -> playMediaAt(position)
             else -> {}
@@ -215,7 +246,7 @@ class VideosFragment : BaseListFragment() {
                 override fun onQueryTextChange(q: String?): Boolean {
                     if (query == q.orEmpty()) return true
                     query = q.orEmpty()
-                    if (loaded) applyFilter()
+                    if (loaded) applyFilter(debounce = true)
                     return true
                 }
             })
@@ -250,6 +281,7 @@ class VideosFragment : BaseListFragment() {
 
     private fun setSort(s: Sort) {
         sort = s
+        AppSettings.setVideosSort(requireContext(), s.name)
         requireActivity().invalidateOptionsMenu()
         if (loaded) applyFilter()
     }

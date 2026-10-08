@@ -67,17 +67,51 @@ data class PlaylistItem(
     }
 }
 
-/** 一覧画面から再生画面へ渡すプレイリスト（件数が多いと Intent に乗らないためメモリで受け渡す） */
+/**
+ * 一覧画面から再生画面へ渡すプレイリスト（件数が多いと Intent に乗らないためメモリで受け渡す）。
+ * アプリが裏で終了させられても再生画面を復元できるように、ファイルにも書いておく
+ */
 object Playlist {
     var items: List<PlaylistItem> = emptyList()
     var shuffle = false
+
+    private fun file(context: Context) = File(context.applicationContext.filesDir, "queue.json")
+
+    fun set(context: Context, list: List<PlaylistItem>, shuffled: Boolean) {
+        items = list
+        shuffle = shuffled
+        val app = context.applicationContext
+        Thread {
+            runCatching {
+                val arr = org.json.JSONArray()
+                list.forEach { arr.put(it.toJson()) }
+                val text = JSONObject().put("shuffle", shuffled).put("items", arr).toString()
+                val tmp = File(file(app).path + ".tmp")
+                tmp.writeText(text)
+                if (!tmp.renameTo(file(app))) {
+                    file(app).delete()
+                    tmp.renameTo(file(app))
+                }
+            }
+        }.start()
+    }
+
+    /** メモリから消えていたら（アプリが一度終了していたら）ファイルから読み直す */
+    fun restoreIfNeeded(context: Context) {
+        if (items.isNotEmpty()) return
+        runCatching {
+            val o = JSONObject(file(context).readText())
+            val arr = o.getJSONArray("items")
+            items = (0 until arr.length()).map { PlaylistItem.fromJson(arr.getJSONObject(it)) }
+            shuffle = o.optBoolean("shuffle")
+        }
+    }
 }
 
 /** 再生画面を開いて再生を始める（音楽なら音楽の画面、動画なら動画の画面） */
 fun Activity.playItems(items: List<PlaylistItem>, index: Int, shuffle: Boolean = false) {
     if (index !in items.indices) return
-    Playlist.items = items
-    Playlist.shuffle = shuffle
+    Playlist.set(this, items, shuffle)
     val cls = if (items[index].isAudio) AudioPlayerActivity::class.java else PlayerActivity::class.java
     startActivity(
         Intent(this, cls)
@@ -95,6 +129,7 @@ const val EXTRA_INDEX = "index"
  */
 fun Context.playlistFromIntent(intent: Intent): Triple<List<PlaylistItem>, Int, Boolean>? {
     val data = intent.data ?: return null
+    Playlist.restoreIfNeeded(this)
     val list = Playlist.items
     val extraIndex = intent.getIntExtra(EXTRA_INDEX, -1)
     val idx = if (extraIndex in list.indices && list[extraIndex].uri == data) extraIndex
@@ -105,7 +140,7 @@ fun Context.playlistFromIntent(intent: Intent): Triple<List<PlaylistItem>, Int, 
 }
 
 /** 再生位置の記憶（続きから再生） */
-class ResumeStore(context: Context) {
+class ResumeStore(private val context: Context) {
     private val prefs = context.getSharedPreferences("resume", Context.MODE_PRIVATE)
 
     fun get(key: String): Long = prefs.getLong(key, 0L)
@@ -119,6 +154,29 @@ class ResumeStore(context: Context) {
 
     fun clear(key: String) {
         prefs.edit().remove(key).apply()
+    }
+
+    /** SDカードが抜かれているだけの場合は消さないように、そのストレージ自体が読めるか確かめる */
+    private fun volumeAvailable(path: String): Boolean {
+        val parts = path.split('/').filter { it.isNotEmpty() }
+        // /storage/emulated/0/... は 3 階層、/storage/XXXX-XXXX/... は 2 階層目までがストレージ
+        val depth = if (parts.getOrNull(1) == "emulated") 3 else 2
+        if (parts.size <= depth) return false
+        return File("/" + parts.take(depth).joinToString("/")).listFiles() != null
+    }
+
+    /** 消えたファイルの再生位置を片付ける（1 日 1 回まで。裏で呼ぶ） */
+    fun prune() {
+        val meta = context.getSharedPreferences("resume_meta", Context.MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        if (now - meta.getLong("pruned_at", 0) < 24 * 60 * 60 * 1000L) return
+        val gone = prefs.all.keys.filter { it.startsWith("/") && !File(it).exists() && volumeAvailable(it) }
+        if (gone.isNotEmpty()) {
+            val editor = prefs.edit()
+            gone.forEach { editor.remove(it) }
+            editor.apply()
+        }
+        meta.edit().putLong("pruned_at", now).apply()
     }
 
     /** 旧バージョンのキー（content:// の Uri）で保存された位置を、新しいキー（ファイルパス）へ移す */

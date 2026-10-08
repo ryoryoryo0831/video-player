@@ -1,12 +1,21 @@
 package com.ryose.videoplayer
 
 import android.os.Bundle
+import android.provider.MediaStore
+import android.view.Menu
+import android.view.MenuInflater
+import android.view.MenuItem
 import android.view.View
 import androidx.activity.OnBackPressedCallback
+import androidx.appcompat.widget.SearchView
+import androidx.core.view.MenuProvider
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -24,6 +33,8 @@ class MusicFragment : BaseListFragment() {
     private var loaded = false
     private var loadedWithAccess = false
     private var savedScroll: android.os.Parcelable? = null
+    private var query = ""
+    private var renderJob: Job? = null
 
     private val backCallback = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() = closeGroup()
@@ -31,7 +42,8 @@ class MusicFragment : BaseListFragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        mode = savedInstanceState?.getString(KEY_MODE)?.let { runCatching { Mode.valueOf(it) }.getOrNull() } ?: Mode.SONGS
+        mode = (savedInstanceState?.getString(KEY_MODE) ?: AppSettings.musicMode(requireContext()))
+            .let { runCatching { Mode.valueOf(it) }.getOrNull() } ?: Mode.SONGS
         val chips = view.findViewById<ChipGroup>(R.id.chips)
         chips.visibility = View.VISIBLE
         Mode.entries.forEach { m ->
@@ -43,6 +55,7 @@ class MusicFragment : BaseListFragment() {
                 setOnClickListener {
                     if (mode != m) {
                         mode = m
+                        AppSettings.setMusicMode(requireContext(), m.name)
                         opened = null
                         render()
                     }
@@ -50,6 +63,39 @@ class MusicFragment : BaseListFragment() {
             })
         }
         requireActivity().onBackPressedDispatcher.addCallback(viewLifecycleOwner, backCallback)
+        requireActivity().addMenuProvider(menuProvider, viewLifecycleOwner, Lifecycle.State.RESUMED)
+        // 曲が増えた・消えたら自動で読み込み直す
+        viewLifecycleOwner.lifecycle.addObserver(
+            MediaWatcher(requireContext().applicationContext, MediaStore.Audio.Media.EXTERNAL_CONTENT_URI) { if (loaded) load() }
+        )
+    }
+
+    private val menuProvider = object : MenuProvider {
+        override fun onCreateMenu(menu: Menu, menuInflater: MenuInflater) {
+            menuInflater.inflate(R.menu.music_menu, menu)
+            val searchItem = menu.findItem(R.id.action_search)
+            val searchView = searchItem.actionView as SearchView
+            searchView.queryHint = "曲名・アーティスト・アルバムで検索"
+            if (query.isNotEmpty()) {
+                searchItem.expandActionView()
+                searchView.setQuery(query, false)
+            }
+            searchView.setOnQueryTextListener(object : SearchView.OnQueryTextListener {
+                override fun onQueryTextSubmit(q: String?) = true
+                override fun onQueryTextChange(q: String?): Boolean {
+                    if (query == q.orEmpty()) return true
+                    query = q.orEmpty()
+                    if (loaded) render(debounce = true)
+                    return true
+                }
+            })
+        }
+
+        override fun onMenuItemSelected(menuItem: MenuItem): Boolean {
+            if (menuItem.itemId != R.id.action_refresh) return false
+            load()
+            return true
+        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -81,17 +127,36 @@ class MusicFragment : BaseListFragment() {
         viewLifecycleOwner.lifecycleScope.launch {
             songs = withContext(Dispatchers.IO) { MediaFiles.queryAllSongs(ctx) }
             loaded = true
+            // 開いていたアルバムなどは、読み込み直した曲で作り直す
+            opened = opened?.let { g -> Group(g.title, g.songs.mapNotNull { old -> songs.find { it.item.key == old.item.key } }) }
             render()
         }
     }
 
     private fun songMeta(s: MediaFiles.Song) = "${s.artist} · ${s.album}"
 
-    private fun render() {
+    private fun matches(s: MediaFiles.Song, q: String) =
+        q.isBlank() || s.title.contains(q, true) || s.artist.contains(q, true) || s.album.contains(q, true)
+
+    /** 一覧を作って表示する（曲が多くても固まらないように、画面の処理とは別のところで作る） */
+    private fun render(debounce: Boolean = false, onShown: (() -> Unit)? = null) {
         backCallback.isEnabled = isResumed && opened != null
         val group = opened
-        val rows: List<Row> = when {
-            group != null -> group.songs.map { Row.Media(it.item, songMeta(it)) }
+        val songs = songs
+        val mode = mode
+        val q = query
+        renderJob?.cancel()
+        renderJob = viewLifecycleOwner.lifecycleScope.launch {
+            if (debounce) delay(200)
+            val rows = withContext(Dispatchers.Default) { buildRows(group, songs.filter { matches(it, q) }, mode, q) }
+            showRows(rows, if (q.isBlank()) "端末内に音楽が見つかりませんでした。" else "「$q」に一致する曲はありません。", R.drawable.ic_music_note)
+            onShown?.invoke()
+        }
+    }
+
+    private fun buildRows(group: Group?, songs: List<MediaFiles.Song>, mode: Mode, q: String): List<Row> {
+        return when {
+            group != null -> group.songs.filter { matches(it, q) }.map { Row.Media(it.item, songMeta(it)) }
             mode == Mode.SONGS -> songs.sortedWith(compareBy(NaturalOrder) { it.title }).map { Row.Media(it.item, songMeta(it)) }
             mode == Mode.ALBUMS -> songs.groupBy { it.albumId }.values
                 .sortedWith(compareBy(NaturalOrder) { it.first().album })
@@ -107,7 +172,6 @@ class MusicFragment : BaseListFragment() {
                     Row.Folder(artist, "$albums 枚のアルバム · ${list.size} 曲", R.drawable.ic_person, id = "artist:$artist")
                 }
         }
-        showRows(rows, "端末内に音楽が見つかりませんでした。", R.drawable.ic_music_note)
     }
 
     /** アルバム・アーティストの行に含まれる曲（アルバムは曲順、アーティストはアルバムごとに曲順） */
@@ -130,9 +194,9 @@ class MusicFragment : BaseListFragment() {
 
     private fun closeGroup() {
         opened = null
-        render()
-        savedScroll?.let { list.layoutManager?.onRestoreInstanceState(it) }
+        val scroll = savedScroll
         savedScroll = null
+        render { scroll?.let { list.layoutManager?.onRestoreInstanceState(it) } }
     }
 
     override fun onRowClick(position: Int) {
@@ -140,8 +204,7 @@ class MusicFragment : BaseListFragment() {
             is Row.Folder -> {
                 savedScroll = list.layoutManager?.onSaveInstanceState()
                 opened = Group(row.name, songsOf(row))
-                render()
-                list.scrollToPosition(0)
+                render { list.scrollToPosition(0) }
             }
             is Row.Media -> playMediaAt(position)
             else -> {}

@@ -153,7 +153,8 @@ class MainActivity : AppCompatActivity() {
             when {
                 art != null -> miniArt.setImageBitmap(art)
                 item.isAudio -> miniArt.setImageResource(R.drawable.ic_music_note)
-                else -> miniArt.load(item.path?.let { File(it) } ?: item.uri) {
+                item.isNetwork -> miniArt.setImageResource(R.drawable.ic_movie)
+                else -> miniArt.load(VideoThumb(item.path, item.uri)) {
                     placeholder(R.drawable.ic_movie)
                     error(R.drawable.ic_movie)
                 }

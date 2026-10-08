@@ -52,6 +52,7 @@ class FoldersFragment : BaseListFragment() {
     /** たどってきた場所（空ならトップ） */
     private val stack = ArrayList<Loc>()
     private val current get() = stack.lastOrNull()
+    @Volatile
     private var roots: List<MediaFiles.Root> = emptyList()
     /** 場所ごとのスクロール位置（戻ったときに元の位置に戻すため） */
     private val scrollStates = mutableMapOf<String, Parcelable?>()
@@ -67,6 +68,17 @@ class FoldersFragment : BaseListFragment() {
     private lateinit var connection: PlaybackConnection
     private val dialogHandler by lazy { VlcDialogHandler(requireActivity()) { (current as? Loc.Net)?.uri } }
     private val renderNetTask = Runnable { renderNet(finished = false) }
+    /** サーバーが応答しないまま待ち続けないように、しばらく何も届かなければあきらめる */
+    private val netTimeoutTask = Runnable {
+        if (current is Loc.Net && netRows.isEmpty() && browser != null && isAdded) {
+            stopBrowser()
+            showRows(
+                emptyList(),
+                "サーバーから応答がありません。\n\nサーバーの電源やネットワークを確認して、もう一度開いてください。",
+                R.drawable.ic_lan,
+            )
+        }
+    }
 
     private val backCallback = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() = goUp()
@@ -81,7 +93,8 @@ class FoldersFragment : BaseListFragment() {
             svc = s
             if (isResumed) {
                 s.setDialogCallbacks(dialogHandler)
-                load()
+                // 端末内のフォルダは onResume で読み込み済み。ネットワークの閲覧・検出はエンジンが必要なのでここで始める
+                if (current !is Loc.Local) load()
             }
         }, onDisconnected = { svc = null })
     }
@@ -306,6 +319,8 @@ class FoldersFragment : BaseListFragment() {
         list.visibility = View.VISIBLE
         loading.visibility = View.VISIBLE
         updateSubtitle()
+        list.removeCallbacks(netTimeoutTask)
+        list.postDelayed(netTimeoutTask, NET_TIMEOUT_MS)
         browser = MediaBrowser(s.libVLC, object : MediaBrowser.EventListener {
             override fun onMediaAdded(index: Int, media: IMedia) {
                 val uri = media.uri ?: return
@@ -324,6 +339,7 @@ class FoldersFragment : BaseListFragment() {
             override fun onMediaRemoved(index: Int, media: IMedia) {}
 
             override fun onBrowseEnd() {
+                list.removeCallbacks(netTimeoutTask)
                 list.removeCallbacks(renderNetTask)
                 renderNet(finished = true)
             }
@@ -347,6 +363,7 @@ class FoldersFragment : BaseListFragment() {
 
     private fun stopBrowser() {
         list.removeCallbacks(renderNetTask)
+        list.removeCallbacks(netTimeoutTask)
         browser?.release()
         browser = null
         releaseMulticast()
@@ -460,5 +477,6 @@ class FoldersFragment : BaseListFragment() {
         const val ACTION_GRANT = "action:grant"
         const val ACTION_ADD_SERVER = "action:add_server"
         const val ACTION_OPEN_URL = "action:open_url"
+        const val NET_TIMEOUT_MS = 20_000L
     }
 }

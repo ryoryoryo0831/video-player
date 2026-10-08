@@ -333,7 +333,7 @@ class PlaybackService : Service() {
         media.release()
         player.play()
 
-        history.add(item)
+        scope.launch(Dispatchers.IO) { history.add(item) }
         loadSubtitles(item)
         loadMeta(item)
         updateSession()
@@ -699,7 +699,7 @@ class PlaybackService : Service() {
     private val saveTask = object : Runnable {
         override fun run() {
             savePosition()
-            handler.postDelayed(this, 2000)
+            handler.postDelayed(this, 5000)
         }
     }
 
@@ -769,7 +769,7 @@ class PlaybackService : Service() {
         if (ms <= 0 || ms == lengthMs) return
         lengthMs = ms
         // 履歴に長さを記録しておく（一覧で視聴位置のバーを出すため）
-        currentItem?.let { history.updateDuration(it.key, ms) }
+        currentItem?.let { item -> scope.launch(Dispatchers.IO) { history.updateDuration(item.key, ms) } }
         updateSession()
     }
 

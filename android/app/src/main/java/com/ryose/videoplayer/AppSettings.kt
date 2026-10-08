@@ -63,4 +63,10 @@ object AppSettings {
     fun setVideosGrid(c: Context, v: Boolean) = prefs(c).edit().putBoolean("videos_grid", v).apply()
     fun videosByFolder(c: Context) = bool(c, "videos_by_folder", false)
     fun setVideosByFolder(c: Context, v: Boolean) = prefs(c).edit().putBoolean("videos_by_folder", v).apply()
+    /** 動画タブの並び順（"DATE"・"NAME"・"DURATION"） */
+    fun videosSort(c: Context) = string(c, "videos_sort", "DATE")
+    fun setVideosSort(c: Context, v: String) = prefs(c).edit().putString("videos_sort", v).apply()
+    /** 音楽タブの表示（"SONGS"・"ALBUMS"・"ARTISTS"） */
+    fun musicMode(c: Context) = string(c, "music_mode", "SONGS")
+    fun setMusicMode(c: Context, v: String) = prefs(c).edit().putString("music_mode", v).apply()
 }

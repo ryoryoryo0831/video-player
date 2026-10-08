@@ -8,6 +8,10 @@ import android.view.MenuItem
 import android.view.View
 import androidx.core.view.MenuProvider
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /** 「履歴」タブ：最近再生した動画 */
@@ -40,13 +44,17 @@ class HistoryFragment : BaseListFragment() {
     }
 
     private fun load() {
-        val now = System.currentTimeMillis()
-        val rows = history.all().map { e ->
-            val ago = DateUtils.getRelativeTimeSpanString(e.playedAt, now, DateUtils.MINUTE_IN_MILLIS)
-            val folder = e.item.path?.let { File(it).parentFile?.name }
-            Row.Media(e.item, listOfNotNull(ago.toString(), folder).joinToString(" · "))
+        viewLifecycleOwner.lifecycleScope.launch {
+            val rows = withContext(Dispatchers.IO) {
+                val now = System.currentTimeMillis()
+                history.all().map { e ->
+                    val ago = DateUtils.getRelativeTimeSpanString(e.playedAt, now, DateUtils.MINUTE_IN_MILLIS)
+                    val folder = e.item.path?.let { File(it).parentFile?.name }
+                    Row.Media(e.item, listOfNotNull(ago.toString(), folder).joinToString(" · "))
+                }
+            }
+            showRows(rows, "再生した動画がここに表示されます。", R.drawable.ic_history)
         }
-        showRows(rows, "再生した動画がここに表示されます。", R.drawable.ic_history)
     }
 
     /** 履歴はその動画だけを再生する */

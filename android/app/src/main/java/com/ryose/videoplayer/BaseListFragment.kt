@@ -44,7 +44,7 @@ abstract class BaseListFragment : Fragment(R.layout.fragment_list) {
     override fun onResume() {
         super.onResume()
         // 再生画面から戻ったとき、視聴位置のバーを更新
-        list.adapter?.notifyItemRangeChanged(0, adapter.itemCount)
+        adapter.refreshProgress()
         updateSubtitle()
     }
 

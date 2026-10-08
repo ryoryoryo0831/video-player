@@ -76,8 +76,9 @@ object MediaFiles {
         context.contentResolver.query(
             collection,
             arrayOf(MediaStore.MediaColumns.DATA, MediaStore.MediaColumns.DURATION),
-            "${MediaStore.MediaColumns.DATA} LIKE ?",
-            arrayOf("${dir.path}/%"),
+            // このフォルダの直下だけ（サブフォルダの中は含めない）。% と _ はそのままの文字として扱う
+            "${MediaStore.MediaColumns.DATA} LIKE ? ESCAPE '\\' AND ${MediaStore.MediaColumns.DATA} NOT LIKE ? ESCAPE '\\'",
+            arrayOf("${escapeLike(dir.path)}/%", "${escapeLike(dir.path)}/%/%"),
             null,
         )?.use { c ->
             buildMap {
@@ -90,6 +91,8 @@ object MediaFiles {
     } catch (_: Exception) {
         emptyMap()
     }
+
+    private fun escapeLike(s: String) = s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
     /** 音楽ライブラリの1曲 */
     data class Song(
@@ -196,25 +199,41 @@ object MediaFiles {
     }
 }
 
-/** 「2話」が「10話」より前に来るように、数字を数値として比べる並び順 */
+/** 「2話」が「10話」より前に来るように、数字を数値として比べる並び順（数千件を並べ替えても重くならないよう、文字を順に見て比べる） */
 object NaturalOrder : Comparator<String> {
-    private val chunk = Regex("[0-9]+|[^0-9]+")
-
     override fun compare(a: String, b: String): Int {
-        val x = chunk.findAll(a.lowercase()).map { it.value }.toList()
-        val y = chunk.findAll(b.lowercase()).map { it.value }.toList()
-        for (i in 0 until minOf(x.size, y.size)) {
-            val p = x[i]
-            val q = y[i]
-            val c = if (p[0] in '0'..'9' && q[0] in '0'..'9') {
-                val pn = p.trimStart('0')
-                val qn = q.trimStart('0')
-                if (pn.length != qn.length) pn.length - qn.length else pn.compareTo(qn)
+        var i = 0
+        var j = 0
+        while (i < a.length && j < b.length) {
+            val ca = a[i]
+            val cb = b[j]
+            if (ca.isAsciiDigit() && cb.isAsciiDigit()) {
+                // 数字の並びどうし：先頭の 0 を飛ばして、桁数→各桁の順に比べる
+                var si = i
+                while (si < a.length && a[si] == '0') si++
+                var sj = j
+                while (sj < b.length && b[sj] == '0') sj++
+                var ei = si
+                while (ei < a.length && a[ei].isAsciiDigit()) ei++
+                var ej = sj
+                while (ej < b.length && b[ej].isAsciiDigit()) ej++
+                val lenDiff = (ei - si) - (ej - sj)
+                if (lenDiff != 0) return lenDiff
+                for (k in 0 until ei - si) {
+                    val d = a[si + k] - b[sj + k]
+                    if (d != 0) return d
+                }
+                i = ei
+                j = ej
             } else {
-                p.compareTo(q)
+                val d = ca.lowercaseChar() - cb.lowercaseChar()
+                if (d != 0) return d
+                i++
+                j++
             }
-            if (c != 0) return c
         }
-        return x.size - y.size
+        return (a.length - i) - (b.length - j)
     }
+
+    private fun Char.isAsciiDigit() = this in '0'..'9'
 }

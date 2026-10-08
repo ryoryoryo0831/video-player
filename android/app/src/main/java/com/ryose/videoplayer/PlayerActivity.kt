@@ -83,6 +83,8 @@ class PlayerActivity : AppCompatActivity() {
     private var svc: PlaybackService? = null
     /** 一覧などから開かれたときに、サービスにつながったら再生を始めるリスト */
     private var pendingLoad: Triple<List<PlaylistItem>, Int, Boolean>? = null
+    /** アプリが裏で終了させられたあとに画面が復元された場合、開き直すための Intent */
+    private var restoreIntent: Intent? = null
 
     private var lengthMs = 0L
     private var videoW = 0
@@ -196,7 +198,7 @@ class PlayerActivity : AppCompatActivity() {
         setupControls()
         setupGestures()
         setupInsets()
-        if (savedInstanceState == null) takeLoadFrom(intent)
+        if (savedInstanceState == null) takeLoadFrom(intent) else restoreIntent = intent
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -227,6 +229,13 @@ class PlayerActivity : AppCompatActivity() {
         s.addListener(listener)
         // ネットワーク再生でログインや証明書の確認を求められたときにダイアログを出す
         s.setDialogCallbacks(dialogHandler)
+        // 再生サービスが一度終了していたら、覚えておいたリストで続きから再生し直す
+        restoreIntent?.let { ri ->
+            restoreIntent = null
+            if (s.currentItem == null && pendingLoad == null && !ri.getBooleanExtra(PlaybackService.EXTRA_FROM_SESSION, false)) {
+                pendingLoad = playlistFromIntent(ri)
+            }
+        }
         if (pendingLoad != null) s.ensureEngineUpToDate()
         s.player.attachViews(videoLayout, null, true, false)
         s.videoUiAttached = true
