@@ -1,0 +1,4 @@
+<!-- 自由な小窓のボタンの後ろ（映像を少し暗くしてボタンを見やすくする） -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#73000000" />
+</shape>

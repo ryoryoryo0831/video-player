@@ -92,11 +92,13 @@
     </string-array>
 
     <string-array name="leave_action_labels">
+        <item>自由な小窓で再生（大きさ・場所を自由に変えられる）</item>
         <item>小窓で再生（ピクチャーインピクチャー）</item>
         <item>音声だけ再生</item>
         <item>一時停止</item>
     </string-array>
     <string-array name="leave_action_values">
+        <item>POPUP</item>
         <item>PIP</item>
         <item>AUDIO</item>
         <item>PAUSE</item>

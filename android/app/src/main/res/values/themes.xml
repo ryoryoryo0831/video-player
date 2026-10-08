@@ -29,6 +29,15 @@
         <item name="android:scaleType">fitCenter</item>
     </style>
 
+    <!-- 自由な小窓のボタン（小さな窓でも並ぶように小さめ） -->
+    <style name="PopupButton">
+        <item name="android:layout_width">34dp</item>
+        <item name="android:layout_height">34dp</item>
+        <item name="android:padding">7dp</item>
+        <item name="android:background">?attr/selectableItemBackgroundBorderless</item>
+        <item name="android:scaleType">fitCenter</item>
+    </style>
+
     <!-- 再生画面の下の道具ボタン（画面の幅に合わせて均等に並べる） -->
     <style name="PlayerToolButton" parent="PlayerButton">
         <item name="android:layout_width">0dp</item>

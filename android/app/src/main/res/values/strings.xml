@@ -15,7 +15,7 @@
     <string name="no_videos">動画が見つかりませんでした。</string>
     <string name="back">戻る</string>
     <string name="rotate">画面の向き</string>
-    <string name="pip">ピクチャーインピクチャー</string>
+    <string name="pip">小窓で再生</string>
     <string name="lock">画面ロック</string>
     <string name="unlock">ロック解除</string>
     <string name="subtitles">字幕</string>
@@ -30,6 +30,10 @@
     <string name="cast">キャスト</string>
     <string name="stop">再生を終了</string>
     <string name="close">閉じる</string>
+    <string name="expand">全画面で再生</string>
+    <string name="rewind">戻る</string>
+    <string name="forward">進む</string>
+    <string name="resize">大きさを変える</string>
     <string name="sleep_timer">スリープタイマー</string>
     <string name="equalizer">イコライザー</string>
     <string name="queue">再生キュー</string>

@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 自由な小窓（ポップアップ再生）。ほかのアプリの上に重ねて表示する -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black">
+
+    <org.videolan.libvlc.util.VLCVideoLayout
+        android:id="@+id/popupVideo"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- タップ・ドラッグ（移動）・ピンチ（大きさ）を受け取る透明なレイヤー -->
+    <View
+        android:id="@+id/popupTouch"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- タップすると出るボタン（ここ自体はタッチを受け取らず、下のレイヤーに渡す） -->
+    <FrameLayout
+        android:id="@+id/popupControls"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/bg_popup_controls">
+
+        <ImageButton
+            android:id="@+id/popupClose"
+            style="@style/PopupButton"
+            android:layout_width="30dp"
+            android:layout_height="30dp"
+            android:layout_gravity="top|start"
+            android:contentDescription="@string/close"
+            android:padding="5dp"
+            android:src="@drawable/ic_close" />
+
+        <ImageButton
+            android:id="@+id/popupExpand"
+            style="@style/PopupButton"
+            android:layout_width="30dp"
+            android:layout_height="30dp"
+            android:layout_gravity="top|end"
+            android:contentDescription="@string/expand"
+            android:padding="5dp"
+            android:src="@drawable/ic_fullscreen" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center"
+            android:orientation="horizontal">
+
+            <ImageButton
+                android:id="@+id/popupRewind"
+                style="@style/PopupButton"
+                android:contentDescription="@string/rewind"
+                android:src="@drawable/ic_stat_rewind" />
+
+            <ImageButton
+                android:id="@+id/popupPrev"
+                style="@style/PopupButton"
+                android:contentDescription="@string/previous"
+                android:src="@drawable/ic_skip_previous" />
+
+            <ImageButton
+                android:id="@+id/popupPlay"
+                style="@style/PopupButton"
+                android:layout_width="42dp"
+                android:layout_height="42dp"
+                android:contentDescription="@string/play_pause"
+                android:padding="6dp"
+                android:src="@drawable/ic_pause" />
+
+            <ImageButton
+                android:id="@+id/popupNext"
+                style="@style/PopupButton"
+                android:contentDescription="@string/next"
+                android:src="@drawable/ic_skip_next" />
+
+            <ImageButton
+                android:id="@+id/popupForward"
+                style="@style/PopupButton"
+                android:contentDescription="@string/forward"
+                android:src="@drawable/ic_stat_forward" />
+        </LinearLayout>
+
+        <!-- 右下のつまみ：ドラッグで大きさを変える -->
+        <ImageView
+            android:id="@+id/popupResize"
+            android:layout_width="30dp"
+            android:layout_height="30dp"
+            android:layout_gravity="bottom|end"
+            android:contentDescription="@string/resize"
+            android:padding="7dp"
+            android:src="@drawable/ic_resize" />
+
+        <ProgressBar
+            android:id="@+id/popupProgress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="3dp"
+            android:layout_gravity="bottom"
+            android:progressTint="@color/accent"
+            android:progressBackgroundTint="#66FFFFFF" />
+    </FrameLayout>
+</FrameLayout>

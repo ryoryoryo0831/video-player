@@ -24,10 +24,12 @@ import android.provider.Settings
 import android.util.Rational
 import android.view.GestureDetector
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
@@ -46,6 +48,7 @@ import androidx.lifecycle.lifecycleScope
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.videolan.libvlc.MediaPlayer
@@ -60,6 +63,7 @@ class PlayerActivity : AppCompatActivity() {
 
     /** ホームボタンなどで動画の画面を離れたときの動作 */
     private enum class LeaveAction(val label: String) {
+        POPUP("自由な小窓で再生（大きさ・場所を自由に変えられる）"),
         PIP("小窓で再生（ピクチャーインピクチャー）"),
         AUDIO("音声だけ再生"),
         PAUSE("一時停止"),
@@ -84,6 +88,9 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var castInfo: TextView
     private lateinit var gestureInfo: TextView
     private lateinit var restartButton: TextView
+    private lateinit var seekPreview: View
+    private lateinit var seekPreviewImage: ImageView
+    private lateinit var seekPreviewTime: TextView
     private lateinit var audioManager: AudioManager
 
     private val handler = Handler(Looper.getMainLooper())
@@ -136,6 +143,16 @@ class PlayerActivity : AppCompatActivity() {
     /** シークバーを動かしている間、映像も追いかけて動かす（間引いて移動） */
     private var lastPreviewSeek = 0L
 
+    /** シークバーを動かしている間に出す、その位置の画像 */
+    private lateinit var thumbs: SeekThumbnails
+    /** 画像を出したい位置（-1 なら出さない）。画像づくりが追いつかないときは最新の位置だけ作る */
+    private val previewTarget = MutableStateFlow(-1L)
+    /** 画像で見せている（このときは映像は動かさず、指を離したときに移動する） */
+    private var previewImages = false
+
+    /** 長押しで 2 倍速にしている間の、元の速さ */
+    private var longPressRate: Float? = null
+
     private val pickSubtitle =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { addSubtitleFromUri(it) } }
 
@@ -151,17 +168,30 @@ class PlayerActivity : AppCompatActivity() {
 
     private val connection = PlaybackConnection(this, autoCreate = true, onConnected = ::onServiceReady, onDisconnected = { svc = null })
 
-    /** 画面を離れたときの動作（設定画面・その他メニューで切り替え。初期設定は小窓で再生） */
+    /** 画面を離れたときの動作（設定画面・その他メニューで切り替え。初期設定は自由な小窓で再生） */
     private var leaveAction: LeaveAction
         get() = runCatching { LeaveAction.valueOf(AppSettings.leaveAction(this)) }.getOrNull()
-            ?.takeIf { it != LeaveAction.PIP || hasPip } ?: if (hasPip) LeaveAction.PIP else LeaveAction.PAUSE
+            ?.takeIf { it != LeaveAction.PIP || hasPip } ?: LeaveAction.POPUP
         set(v) = AppSettings.setLeaveAction(this, v.name)
+
+    private val canPopup get() = Settings.canDrawOverlays(this)
+
+    /**
+     * OS の小窓（ピクチャーインピクチャー）を使うか。
+     * 自由な小窓の設定でも、まだ許可が無いときは OS の小窓で代わりに再生する
+     */
+    private fun usesSystemPip() = hasPip &&
+        (leaveAction == LeaveAction.PIP || (leaveAction == LeaveAction.POPUP && !canPopup))
+
+    /** 自由な小窓に再生を引き渡して、この画面を閉じるところ */
+    private var handedToPopup = false
 
     // 設定（画面を開くたびに読み直す）
     private var gestureBrightness = true
     private var gestureVolume = true
     private var gestureSeek = true
     private var gestureDoubleTap = true
+    private var gestureLongPress = true
     private var doubleTapMs = 10_000L
 
     private fun readSettings() {
@@ -169,6 +199,7 @@ class PlayerActivity : AppCompatActivity() {
         gestureVolume = AppSettings.gestureVolume(this)
         gestureSeek = AppSettings.gestureSeek(this)
         gestureDoubleTap = AppSettings.gestureDoubleTap(this)
+        gestureLongPress = AppSettings.gestureLongPress(this)
         doubleTapMs = AppSettings.doubleTapMs(this)
     }
 
@@ -216,6 +247,11 @@ class PlayerActivity : AppCompatActivity() {
         }
         gestureInfo = findViewById(R.id.gestureInfo)
         restartButton = findViewById(R.id.restartButton)
+        seekPreview = findViewById(R.id.seekPreview)
+        seekPreviewImage = findViewById(R.id.seekPreviewImage)
+        seekPreviewTime = findViewById(R.id.seekPreviewTime)
+        thumbs = SeekThumbnails(applicationContext)
+        collectSeekPreviews()
         restartButton.setOnClickListener {
             svc?.seekTo(0)
             restartButton.visibility = View.GONE
@@ -273,6 +309,8 @@ class PlayerActivity : AppCompatActivity() {
                 pendingLoad = playlistFromIntent(ri)
             }
         }
+        // 自由な小窓で再生していたら、この画面に戻す
+        s.closePopup()
         if (pendingLoad != null) s.ensureEngineUpToDate()
         s.player.attachViews(videoLayout, null, true, false)
         s.videoUiAttached = true
@@ -312,12 +350,18 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
+        endLongPressSpeed()
         // 別の画面が前に出たら、そちらがダイアログを担当する
         svc?.let { it.setDialogCallbacks(null) }
     }
 
     override fun onStop() {
         super.onStop()
+        // 自由な小窓に引き渡した：再生はそのまま続ける
+        if (handedToPopup) {
+            disconnect()
+            return
+        }
         val s = svc
         if (s != null) {
             when {
@@ -349,6 +393,7 @@ class PlayerActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         if (pipReceiverRegistered) runCatching { unregisterReceiver(pipReceiver) }
+        thumbs.release()
         disconnect()
         handler.removeCallbacksAndMessages(null)
     }
@@ -663,6 +708,8 @@ class PlayerActivity : AppCompatActivity() {
                 showInfo(if (hw) "ハードウェアデコードに切り替えました" else "ソフトウェアデコードに切り替えました")
             })
             add(SheetItem(R.drawable.ic_camera, "スクリーンショット") { takeScreenshot() })
+            add(SheetItem(R.drawable.ic_pip, "自由な小窓で再生", "大きさ・場所を自由に変えられる小窓") { startPopup() })
+            if (hasPip) add(SheetItem(R.drawable.ic_pip, "小窓で再生（ピクチャーインピクチャー）") { enterPip() })
             add(SheetItem(R.drawable.ic_pip, "画面を離れたとき", leaveAction.label) { showLeaveActionMenu() })
             add(SheetItem(R.drawable.ic_settings, "設定") { startActivity(Intent(this@PlayerActivity, SettingsActivity::class.java)) })
         }
@@ -674,7 +721,7 @@ class PlayerActivity : AppCompatActivity() {
         val current = leaveAction
         ActionSheet.show(this, "ホームボタンなどで画面を離れたとき", options.map { o ->
             val icon = when (o) {
-                LeaveAction.PIP -> R.drawable.ic_pip
+                LeaveAction.POPUP, LeaveAction.PIP -> R.drawable.ic_pip
                 LeaveAction.AUDIO -> R.drawable.ic_music_note
                 LeaveAction.PAUSE -> R.drawable.ic_pause
             }
@@ -682,6 +729,7 @@ class PlayerActivity : AppCompatActivity() {
                 leaveAction = o
                 updatePipParams()
                 showInfo("画面を離れたとき：${o.label}")
+                if (o == LeaveAction.POPUP && !canPopup) askOverlayPermission()
             }
         })
     }
@@ -866,9 +914,9 @@ class PlayerActivity : AppCompatActivity() {
             scheduleHide()
         }
         findViewById<View>(R.id.backButton).setOnClickListener { finish() }
-        findViewById<View>(R.id.pipButton).apply {
-            visibility = if (hasPip) View.VISIBLE else View.GONE
-            setOnClickListener { enterPip() }
+        // 小窓のボタン：設定に合わせて、自由な小窓か OS の小窓にする
+        findViewById<View>(R.id.pipButton).setOnClickListener {
+            if (leaveAction == LeaveAction.PIP && hasPip) enterPip() else startPopup()
         }
         playButton.onTap { svc?.togglePlay() }
         findViewById<View>(R.id.prevButton).onTap { svc?.previous() }
@@ -893,11 +941,16 @@ class PlayerActivity : AppCompatActivity() {
                     svc?.seekTo(progress.toLong())
                     scheduleHide()
                 } else {
-                    // 動かしている最中も、映像が追いかけて見えるように時々移動する
-                    val now = android.os.SystemClock.uptimeMillis()
-                    if (now - lastPreviewSeek > 300) {
-                        lastPreviewSeek = now
-                        svc?.seekTo(progress.toLong())
+                    updateSeekPreview(progress)
+                    if (previewImages) {
+                        previewTarget.value = progress.toLong()
+                    } else {
+                        // 画像を作れない動画（ネットワークなど）は、映像が追いかけて見えるように時々移動する
+                        val now = android.os.SystemClock.uptimeMillis()
+                        if (now - lastPreviewSeek > 300) {
+                            lastPreviewSeek = now
+                            svc?.seekTo(progress.toLong())
+                        }
                     }
                 }
             }
@@ -905,14 +958,89 @@ class PlayerActivity : AppCompatActivity() {
             override fun onStartTrackingTouch(sb: SeekBar) {
                 userSeeking = true
                 handler.removeCallbacks(hideControlsTask)
+                startSeekPreview(sb.progress)
             }
 
             override fun onStopTrackingTouch(sb: SeekBar) {
+                seekPreview.visibility = View.GONE
+                previewTarget.value = -1
                 svc?.seekTo(sb.progress.toLong())
                 userSeeking = false
                 scheduleHide()
             }
         })
+    }
+
+    // ---------- シーク中のプレビュー ----------
+
+    private fun startSeekPreview(progress: Int) {
+        previewImages = thumbs.supports(svc?.currentItem)
+        seekPreviewImage.setImageDrawable(null)
+        seekPreviewImage.visibility = if (previewImages) View.VISIBLE else View.GONE
+        seekPreview.visibility = View.VISIBLE
+        updateSeekPreview(progress)
+        if (previewImages) previewTarget.value = progress.toLong()
+    }
+
+    /** 時間を書きかえて、シークバーのつまみの真上に置く */
+    private fun updateSeekPreview(progress: Int) {
+        seekPreviewTime.text = formatTime(progress.toLong())
+        val parent = seekPreview.parent as View
+        seekPreview.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED)
+        val w = seekPreview.measuredWidth
+        val h = seekPreview.measuredHeight
+        val bar = IntArray(2).also { seekBar.getLocationInWindow(it) }
+        val origin = IntArray(2).also { parent.getLocationInWindow(it) }
+        val track = seekBar.width - seekBar.paddingLeft - seekBar.paddingRight
+        val fraction = if (seekBar.max > 0) progress.toFloat() / seekBar.max else 0f
+        val thumbX = bar[0] - origin[0] + seekBar.paddingLeft + track * fraction
+        val dp = resources.displayMetrics.density
+        val margin = 8 * dp
+        seekPreview.translationX = (thumbX - w / 2f).coerceIn(margin, maxOf(margin, parent.width - w - margin))
+        seekPreview.translationY = bar[1] - origin[1] + seekBar.paddingTop - h - 12 * dp
+    }
+
+    /** 画像づくりは裏で行い、間に合わなかった途中の位置は飛ばす */
+    private fun collectSeekPreviews() {
+        val dp = resources.displayMetrics.density
+        val maxW = (176 * dp).toInt()
+        val maxH = (99 * dp).toInt()
+        lifecycleScope.launch {
+            previewTarget.collect { ms ->
+                val item = svc?.currentItem
+                if (ms < 0 || item == null || !previewImages) return@collect
+                val frame = thumbs.frameAt(item, ms, maxW, maxH)
+                if (!userSeeking || !previewImages) return@collect
+                if (frame != null) {
+                    seekPreviewImage.setImageBitmap(frame)
+                } else if (!thumbs.supports(item)) {
+                    // この動画は画像を作れなかった：代わりに映像そのものを動かして見せる
+                    previewImages = false
+                    seekPreviewImage.visibility = View.GONE
+                    updateSeekPreview(seekBar.progress)
+                    svc?.seekTo(seekBar.progress.toLong())
+                }
+            }
+        }
+    }
+
+    // ---------- 長押しで 2 倍速 ----------
+
+    private fun startLongPressSpeed() {
+        val s = svc ?: return
+        longPressRate = s.rate
+        s.setPlaybackRate(2f)
+        touchLayer.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        showInfo("2倍速  ⏩", autoHide = false)
+    }
+
+    /** 指を離したら元の速さに戻す */
+    private fun endLongPressSpeed() {
+        val r = longPressRate ?: return
+        longPressRate = null
+        svc?.setPlaybackRate(r)
+        handler.removeCallbacks(hideInfo)
+        handler.post(hideInfo)
     }
 
     private fun setupInsets() {
@@ -1030,13 +1158,13 @@ class PlayerActivity : AppCompatActivity() {
             builder.setAspectRatio(r)
         }
         if (Build.VERSION.SDK_INT >= 31) {
-            builder.setAutoEnterEnabled(svc?.isPlaying == true && leaveAction == LeaveAction.PIP && svc?.renderer == null)
+            builder.setAutoEnterEnabled(svc?.isPlaying == true && usesSystemPip() && svc?.renderer == null)
         }
         builder.setActions(pipActions())
         return builder.build()
     }
 
-    /** 小窓に出すボタン（戻る・再生/一時停止・進む） */
+    /** 小窓に出すボタン（戻る・再生/一時停止・進む。5 個まで出せる端末では前へ・次へも） */
     private fun pipActions(): List<RemoteAction> {
         fun action(icon: Int, title: String, code: Int) = RemoteAction(
             Icon.createWithResource(this, icon), title, title,
@@ -1046,12 +1174,15 @@ class PlayerActivity : AppCompatActivity() {
             ),
         )
         val playing = svc?.isPlaying == true
-        return listOf(
+        val basic = listOf(
             action(R.drawable.ic_stat_rewind, "戻る", PIP_REWIND),
             if (playing) action(R.drawable.ic_stat_pause, "一時停止", PIP_PLAY_PAUSE)
             else action(R.drawable.ic_stat_play, "再生", PIP_PLAY_PAUSE),
             action(R.drawable.ic_stat_forward, "進む", PIP_FORWARD),
         )
+        if (maxNumPictureInPictureActions < 5) return basic
+        return listOf(action(R.drawable.ic_stat_skip_previous, "前へ", PIP_PREVIOUS)) + basic +
+            action(R.drawable.ic_stat_skip_next, "次へ", PIP_NEXT)
     }
 
     private val pipReceiver = object : BroadcastReceiver() {
@@ -1061,6 +1192,8 @@ class PlayerActivity : AppCompatActivity() {
                 PIP_REWIND -> s.seekBy(-doubleTapMs)
                 PIP_PLAY_PAUSE -> s.togglePlay()
                 PIP_FORWARD -> s.seekBy(doubleTapMs)
+                PIP_PREVIOUS -> s.previous()
+                PIP_NEXT -> s.next()
             }
         }
     }
@@ -1076,8 +1209,62 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        // Android 12 以降は setAutoEnterEnabled で自動的に PiP になる
-        if (Build.VERSION.SDK_INT < 31 && svc?.isPlaying == true && leaveAction == LeaveAction.PIP && svc?.renderer == null) enterPip()
+        val s = svc ?: return
+        if (!s.isPlaying || s.renderer != null) return
+        when {
+            leaveAction == LeaveAction.POPUP && canPopup -> startPopup()
+            // Android 12 以降は setAutoEnterEnabled で自動的に PiP になる
+            Build.VERSION.SDK_INT < 31 && usesSystemPip() -> enterPip()
+        }
+    }
+
+    // ---------- 自由な小窓 ----------
+
+    /** 再生を自由な小窓に引き渡して、この画面を閉じる */
+    private fun startPopup() {
+        val s = svc ?: return
+        if (s.renderer != null) {
+            showInfo("キャスト中は小窓にできません")
+            return
+        }
+        if (!canPopup) {
+            askOverlayPermission()
+            return
+        }
+        handedToPopup = true
+        s.removeListener(listener)
+        // 画面を閉じる前と同じように、いったん映像を止めてから小窓に付け替える
+        s.setVideoEnabled(false)
+        s.videoUiAttached = false
+        s.player.detachViews()
+        if (!s.showPopup()) {
+            handedToPopup = false
+            s.addListener(listener)
+            s.player.attachViews(videoLayout, null, true, false)
+            s.videoUiAttached = true
+            s.restoreVideo()
+            Toast.makeText(this, "小窓を表示できませんでした", Toast.LENGTH_SHORT).show()
+            return
+        }
+        finish()
+    }
+
+    /** 「他のアプリの上に重ねて表示」の許可をお願いする */
+    private fun askOverlayPermission() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("自由な小窓を使うには")
+            .setMessage(
+                "ほかのアプリを使っている間も小窓を表示するため、「他のアプリの上に重ねて表示」の許可が必要です。\n\n" +
+                    "次の画面で Orbit のスイッチをオンにして、戻ってきてください。"
+            )
+            .setPositiveButton("設定を開く") { _, _ ->
+                runCatching {
+                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+                }
+            }
+            .apply { if (hasPip) setNeutralButton("いつもの小窓を使う") { _, _ -> enterPip() } }
+            .setNegativeButton("キャンセル", null)
+            .show()
     }
 
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
@@ -1107,6 +1294,7 @@ class PlayerActivity : AppCompatActivity() {
     // タップ: コントロールの表示/非表示
     // 左半分の上下スワイプ: 明るさ / 右半分の上下スワイプ: 音量 / 左右スワイプ: シーク
     // ダブルタップ: 左=10秒戻る、右=10秒進む、中央=再生/一時停止
+    // 長押し: 押している間だけ 2 倍速
 
     /** ピンチで拡大（1〜4 倍）。元に戻すときは指を縮めるか、画面サイズのボタン */
     private fun setZoom(z: Float) {
@@ -1162,6 +1350,14 @@ class PlayerActivity : AppCompatActivity() {
                     else -> s.togglePlay()
                 }
                 return true
+            }
+
+            override fun onLongPress(e: MotionEvent) {
+                val s = svc ?: return
+                if (!gestureLongPress || pinching || gesture != Gesture.NONE || !s.isPlaying) return
+                // 指を離すまで、ほかのジェスチャーは受け付けない
+                gesture = Gesture.IGNORE
+                startLongPressSpeed()
             }
 
             override fun onScroll(e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
@@ -1226,6 +1422,7 @@ class PlayerActivity : AppCompatActivity() {
             val action = e.actionMasked
             if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) pinching = false
             if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                endLongPressSpeed()
                 val was = gesture
                 gesture = Gesture.NONE
                 if (was == Gesture.SEEK && action == MotionEvent.ACTION_UP) svc?.seekTo(seekTarget)
@@ -1258,5 +1455,7 @@ class PlayerActivity : AppCompatActivity() {
         const val PIP_REWIND = 1
         const val PIP_PLAY_PAUSE = 2
         const val PIP_FORWARD = 3
+        const val PIP_PREVIOUS = 4
+        const val PIP_NEXT = 5
     }
 }

@@ -123,6 +123,28 @@ class PlaybackService : Service() {
     /** 動画の画面が表示されているか（表示されていない間に始まる動画は音声だけ再生する） */
     var videoUiAttached = false
 
+    /** 自由な小窓（ポップアップ再生） */
+    private var popup: PopupPlayer? = null
+    val isPopupShowing: Boolean get() = popup?.isShowing == true
+
+    /** 今の動画を自由な小窓で表示する（許可が無いなどで出せなければ false） */
+    fun showPopup(): Boolean {
+        val item = currentItem ?: return false
+        if (item.isAudio || renderer != null) return false
+        val p = popup ?: PopupPlayer(this).also { popup = it }
+        return p.show()
+    }
+
+    /** 自由な小窓を閉じる（再生は続ける） */
+    fun closePopup() {
+        popup?.dismiss()
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        popup?.onScreenChanged()
+    }
+
     /** 動画の映像を止めて音声だけ再生する／映像を戻す */
     fun setVideoEnabled(enabled: Boolean) {
         if (enabled == !videoTrackDisabled) return
@@ -196,6 +218,7 @@ class PlaybackService : Service() {
     }
 
     override fun onDestroy() {
+        popup?.dismiss()
         savePosition()
         stopRendererDiscovery()
         renderer?.release()

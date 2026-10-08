@@ -271,6 +271,37 @@
         android:textSize="15sp"
         android:visibility="gone" />
 
+    <!-- シークバーを動かしている間に出す、その位置の画像と時間（位置はコードで合わせる） -->
+    <LinearLayout
+        android:id="@+id/seekPreview"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:background="@drawable/bg_info"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:padding="4dp"
+        android:visibility="gone">
+
+        <ImageView
+            android:id="@+id/seekPreviewImage"
+            android:layout_width="176dp"
+            android:layout_height="99dp"
+            android:background="@android:color/black"
+            android:importantForAccessibility="no"
+            android:scaleType="fitCenter" />
+
+        <TextView
+            android:id="@+id/seekPreviewTime"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="2dp"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
     <TextView
         android:id="@+id/gestureInfo"
         android:layout_width="wrap_content"

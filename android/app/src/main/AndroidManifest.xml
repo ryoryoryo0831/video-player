@@ -30,6 +30,9 @@
         android:name="android.hardware.touchscreen"
         android:required="false" />
 
+    <!-- 自由な小窓（ほかのアプリの上に重ねて表示する小窓） -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
     <!-- 画面を消しても再生を続けるためのサービス -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />

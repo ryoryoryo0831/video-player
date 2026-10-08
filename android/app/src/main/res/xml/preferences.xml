@@ -55,7 +55,7 @@
             app:summary="途中まで見た動画を、前回の位置から再生します"
             app:title="続きから再生" />
         <ListPreference
-            app:defaultValue="PIP"
+            app:defaultValue="POPUP"
             app:entries="@array/leave_action_labels"
             app:entryValues="@array/leave_action_values"
             app:iconSpaceReserved="false"
@@ -124,6 +124,12 @@
             app:key="gesture_double_tap"
             app:summary="左側で戻る、右側で進む、真ん中で再生／一時停止"
             app:title="ダブルタップでスキップ" />
+        <SwitchPreferenceCompat
+            app:defaultValue="true"
+            app:iconSpaceReserved="false"
+            app:key="gesture_long_press"
+            app:summary="画面を押している間だけ 2 倍速で再生し、指を離すと元の速さに戻ります"
+            app:title="長押しで2倍速" />
         <ListPreference
             app:defaultValue="10"
             app:dependency="gesture_double_tap"

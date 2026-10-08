@@ -56,12 +56,12 @@ object AppSettings {
         )
     }
 
-    /** 動画の画面を離れたとき："PIP"・"AUDIO"・"PAUSE" */
+    /** 動画の画面を離れたとき："POPUP"（自由な小窓）・"PIP"・"AUDIO"・"PAUSE" */
     fun leaveAction(c: Context): String {
         val p = prefs(c)
-        if (p.contains("leave_action")) return p.getString("leave_action", "PIP") ?: "PIP"
+        if (p.contains("leave_action")) return p.getString("leave_action", "POPUP") ?: "POPUP"
         // 以前のバージョンで保存した値を引き継ぐ
-        return c.getSharedPreferences("player", Context.MODE_PRIVATE).getString("leave_action", null) ?: "PIP"
+        return c.getSharedPreferences("player", Context.MODE_PRIVATE).getString("leave_action", null) ?: "POPUP"
     }
 
     fun setLeaveAction(c: Context, v: String) = prefs(c).edit().putString("leave_action", v).apply()
@@ -71,7 +71,15 @@ object AppSettings {
     fun gestureVolume(c: Context) = bool(c, "gesture_volume", true)
     fun gestureSeek(c: Context) = bool(c, "gesture_seek", true)
     fun gestureDoubleTap(c: Context) = bool(c, "gesture_double_tap", true)
+    fun gestureLongPress(c: Context) = bool(c, "gesture_long_press", true)
     fun doubleTapMs(c: Context) = (string(c, "double_tap_seconds", "10").toIntOrNull() ?: 10) * 1000L
+
+    // 自由な小窓の大きさ（長い方の辺、dp）と位置（px）。前回の場所に出す
+    fun popupSizeDp(c: Context) = prefs(c).getInt("popup_size", PopupGeometry.DEFAULT_SIZE_DP)
+    fun popupPosition(c: Context): Pair<Int, Int>? = prefs(c).takeIf { it.contains("popup_x") }
+        ?.let { it.getInt("popup_x", 0) to it.getInt("popup_y", 0) }
+    fun setPopupPlacement(c: Context, sizeDp: Int, x: Int, y: Int) =
+        prefs(c).edit().putInt("popup_size", sizeDp).putInt("popup_x", x).putInt("popup_y", y).apply()
 
     // 一覧
     fun videosGrid(c: Context) = bool(c, "videos_grid", false)
