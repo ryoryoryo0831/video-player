@@ -14,7 +14,7 @@ val keystorePassword = System.getenv("KEYSTORE_PASSWORD")
 
 android {
     namespace = "com.ryose.videoplayer"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.ryose.videoplayer"
