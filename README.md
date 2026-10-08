@@ -1,4 +1,4 @@
-# ビデオプレイヤー
+# Orbit（動画・音楽プレイヤー）
 
 - `index.html` … ブラウザ版（ダブルクリックで開くだけで使えます）
 - `android/` … Android アプリ版（Kotlin + libVLC：VLC と同じ再生エンジン）
@@ -6,7 +6,7 @@
 ## Android 版のインストール
 
 1. GitHub に push すると、GitHub Actions が自動で APK をビルドします。
-2. スマホでこのリポジトリの **Releases**（最新版）を開き、`VideoPlayer-*.apk` をダウンロード。
+2. スマホでこのリポジトリの **Releases**（最新版）を開き、`Orbit-*.apk` をダウンロード。
 3. 「提供元不明のアプリ」のインストールを許可してインストール。
 
 ## Android 版の機能

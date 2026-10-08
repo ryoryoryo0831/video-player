@@ -1,14 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- アプリのアイコンの前景：角の丸い白い再生マーク -->
+<!-- テーマアイコン（Android 13 以降で壁紙の色に合わせる場合）用 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- うっすら影 -->
-    <path
-        android:fillColor="#26000000"
-        android:pathData="M46,37 Q42,34.8 42,39.6 L42,72.4 Q42,77.2 46,75 L74,59.4 Q78.4,56 74,52.6 Z" />
     <path
         android:fillColor="#FFFFFFFF"
         android:pathData="M46,35 Q42,32.8 42,37.6 L42,70.4 Q42,75.2 46,73 L74,57.4 Q78.4,54 74,50.6 Z" />

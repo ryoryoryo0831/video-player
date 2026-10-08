@@ -1,15 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android TV のホーム画面に出す横長のバナー（アイコンと同じグラデーションと再生マーク） -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="320dp"
     android:height="180dp"
     android:viewportWidth="320"
     android:viewportHeight="180">
+    <path android:pathData="M0,0h320v180h-320z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="320"
+                android:endY="180"
+                android:startX="0"
+                android:startY="0"
+                android:type="linear">
+                <item android:color="#FF3D7BFF" android:offset="0" />
+                <item android:color="#FF6A5CFF" android:offset="0.5" />
+                <item android:color="#FFA455F2" android:offset="1" />
+            </gradient>
+        </aapt:attr>
+    </path>
     <path
-        android:fillColor="#FF0F1115"
-        android:pathData="M0,0h320v180h-320z" />
-    <path
-        android:fillColor="#FF4F8CFF"
-        android:pathData="M110,90a50,50 0,1 1,100 0a50,50 0,1 1,-100 0z" />
+        android:fillColor="#26000000"
+        android:pathData="M146,64 Q140,60.7 140,67.9 L140,117.1 Q140,124.3 146,121 L188,97.6 Q194.6,92.5 188,87.4 Z" />
     <path
         android:fillColor="#FFFFFFFF"
-        android:pathData="M148,66L184,90L148,114z" />
+        android:pathData="M146,61 Q140,57.7 140,64.9 L140,114.1 Q140,121.3 146,118 L188,94.6 Q194.6,89.5 188,84.4 Z" />
 </vector>

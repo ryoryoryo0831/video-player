@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">ビデオプレイヤー</string>
+    <string name="app_name">Orbit</string>
     <string name="search">検索</string>
     <string name="open_file">ファイルを開く</string>
     <string name="open_url">URLを開く</string>
