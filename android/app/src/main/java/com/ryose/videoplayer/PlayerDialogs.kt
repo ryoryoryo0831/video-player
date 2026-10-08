@@ -60,7 +60,7 @@ object PlayerDialogs {
             valueFrom = 0.25f
             valueTo = 4f
             stepSize = 0.05f
-            value = (Math.round(svc.rate * 20) / 20f).coerceIn(0.25f, 4f)
+            this.value = (Math.round(svc.rate * 20) / 20f).coerceIn(0.25f, 4f)
             setLabelFormatter { formatRate(it) }
         }
         fun apply(r: Float) {
