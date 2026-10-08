@@ -2,23 +2,17 @@ package com.ryose.videoplayer
 
 import android.annotation.SuppressLint
 import android.app.PictureInPictureParams
-import android.content.BroadcastReceiver
-import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Color
-import android.media.AudioAttributes
-import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.ParcelFileDescriptor
 import android.provider.Settings
 import android.util.Rational
 import android.view.GestureDetector
@@ -40,31 +34,23 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.updatePadding
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.videolan.libvlc.LibVLC
-import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
-import org.videolan.libvlc.interfaces.IMedia
 import org.videolan.libvlc.util.VLCVideoLayout
-import java.io.File
-import java.io.FileNotFoundException
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
+/** 動画の再生画面。再生そのものは PlaybackService が担当し、この画面は表示と操作を受け持つ */
 class PlayerActivity : AppCompatActivity() {
 
     private enum class Gesture { NONE, IGNORE, BRIGHTNESS, VOLUME, SEEK }
 
-    /** リピート：しない → 全体 → 1本 の順に切り替わる */
-    private enum class Repeat { OFF, ALL, ONE }
-
-    private lateinit var libVLC: LibVLC
-    private lateinit var player: MediaPlayer
     private lateinit var videoLayout: VLCVideoLayout
     private lateinit var touchLayer: View
     private lateinit var topBar: View
@@ -74,41 +60,24 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var timeCurrent: TextView
     private lateinit var timeDuration: TextView
     private lateinit var playButton: ImageButton
-    private lateinit var prevButton: ImageButton
     private lateinit var nextButton: ImageButton
     private lateinit var speedButton: TextView
     private lateinit var repeatButton: ImageButton
     private lateinit var unlockButton: ImageButton
     private lateinit var gestureInfo: TextView
-    private lateinit var resume: ResumeStore
-    private lateinit var history: HistoryStore
     private lateinit var audioManager: AudioManager
 
     private val handler = Handler(Looper.getMainLooper())
     private val hasPip by lazy { packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE) }
 
-    // プレイリスト
-    private var items: List<PlaylistItem> = emptyList()
-    private var index = 0
-    /** 再生する順番（items のインデックス）。シャッフル中は並びが変わる */
-    private var order: List<Int> = emptyList()
-    private var orderPos = 0
-    private var shuffle = false
-    private var repeat = Repeat.OFF
-    private var openFd: ParcelFileDescriptor? = null
-    /** 「字幕ファイルを追加」で読み込んだ字幕（動画ごと） */
-    private val addedSubtitles = mutableMapOf<String, MutableList<File>>()
+    private var svc: PlaybackService? = null
+    /** 一覧などから開かれたときに、サービスにつながったら再生を始めるリスト */
+    private var pendingLoad: Triple<List<PlaylistItem>, Int, Boolean>? = null
 
-    // 再生状態
-    private var viewsAttached = false
-    private var pendingStart: Long? = null
-    private var pendingPaused = false
     private var lengthMs = 0L
-    private var rate = 1f
     private var videoW = 0
     private var videoH = 0
     private var scaleIndex = 0
-    private var pausedByFocus = false
 
     // 画面の状態
     private var controlsVisible = true
@@ -131,14 +100,7 @@ class PlayerActivity : AppCompatActivity() {
         MediaPlayer.ScaleType.SURFACE_4_3 to "4:3",
         MediaPlayer.ScaleType.SURFACE_ORIGINAL to "元のサイズ",
     )
-    private val speeds = floatArrayOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f, 3f, 4f)
 
-    private val saveTask = object : Runnable {
-        override fun run() {
-            savePosition()
-            handler.postDelayed(this, 2000)
-        }
-    }
     private val hideInfo = Runnable { gestureInfo.visibility = View.GONE }
     private val hideControlsTask = Runnable { hideControls() }
     private val hideUnlockTask = Runnable { unlockButton.visibility = View.GONE }
@@ -146,44 +108,26 @@ class PlayerActivity : AppCompatActivity() {
     private val pickSubtitle =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { addSubtitleFromUri(it) } }
 
-    // ---------- 音声フォーカス（他のアプリの音や電話との調整） ----------
-
-    private val focusRequest by lazy {
-        AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
-                    .build()
-            )
-            .setOnAudioFocusChangeListener { change ->
-                when (change) {
-                    AudioManager.AUDIOFOCUS_LOSS -> player.pause()
-                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> if (player.isPlaying) {
-                        pausedByFocus = true
-                        player.pause()
-                    }
-                    AudioManager.AUDIOFOCUS_GAIN -> if (pausedByFocus) {
-                        pausedByFocus = false
-                        player.play()
-                    }
-                }
-            }
-            .build()
+    private val listener = object : PlaybackService.Listener {
+        override fun onPlayerEvent(e: MediaPlayer.Event) = handleEvent(e)
+        override fun onItemChanged() = updateItem()
+        override fun onModesChanged() = updateModes()
+        override fun onPlaybackStopped() = finish()
     }
 
-    /** イヤホンが抜けたら一時停止 */
-    private val noisyReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) player.pause()
-        }
-    }
+    private val connection = PlaybackConnection(this, autoCreate = true, onConnected = ::onServiceReady, onDisconnected = { svc = null })
+
+    /** 動画画面を離れたあとも音声だけ再生し続けるか（その他メニューで切り替え） */
+    private var backgroundAudio: Boolean
+        get() = getSharedPreferences("player", MODE_PRIVATE).getBoolean("bg_audio", false)
+        set(v) = getSharedPreferences("player", MODE_PRIVATE).edit().putBoolean("bg_audio", v).apply()
 
     // ---------- ライフサイクル ----------
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_player)
+        volumeControlStream = AudioManager.STREAM_MUSIC
 
         if (Build.VERSION.SDK_INT >= 28) {
             window.attributes = window.attributes.apply {
@@ -202,36 +146,13 @@ class PlayerActivity : AppCompatActivity() {
         timeCurrent = findViewById(R.id.timeCurrent)
         timeDuration = findViewById(R.id.timeDuration)
         playButton = findViewById(R.id.playButton)
-        prevButton = findViewById(R.id.prevButton)
         nextButton = findViewById(R.id.nextButton)
         speedButton = findViewById(R.id.speedButton)
         repeatButton = findViewById(R.id.repeatButton)
         unlockButton = findViewById(R.id.unlockButton)
         gestureInfo = findViewById(R.id.gestureInfo)
-        resume = ResumeStore(this)
-        history = HistoryStore(this)
         audioManager = getSystemService(AudioManager::class.java)
-        repeat = runCatching {
-            Repeat.valueOf(getSharedPreferences("player", MODE_PRIVATE).getString("repeat", null) ?: "OFF")
-        }.getOrDefault(Repeat.OFF)
 
-        libVLC = LibVLC(
-            this,
-            arrayListOf(
-                "--audio-time-stretch",     // 速度を変えても声の高さを変えない
-                "--no-sub-autodetect-file", // 字幕の自動読み込みはアプリ側で行う（文字コード変換のため）
-                "--http-reconnect",
-            )
-        )
-        player = MediaPlayer(libVLC)
-        player.setEventListener(object : MediaPlayer.EventListener {
-            override fun onEvent(event: MediaPlayer.Event) = onPlayerEvent(event)
-        })
-
-        ContextCompat.registerReceiver(
-            this, noisyReceiver, IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY),
-            ContextCompat.RECEIVER_NOT_EXPORTED,
-        )
         onBackPressedDispatcher.addCallback(this) {
             if (locked) showUnlockBriefly() else finish()
         }
@@ -239,50 +160,79 @@ class PlayerActivity : AppCompatActivity() {
         setupControls()
         setupGestures()
         setupInsets()
-        loadFromIntent(intent)
+        if (savedInstanceState == null) takeLoadFrom(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        savePosition()
+        takeLoadFrom(intent)
+        // 別の動画が選ばれた場合、表示中ならすぐ切り替える（裏にいた場合は onStart でつながってから）
+        val s = svc
+        if (s != null && pendingLoad != null) startPendingLoad(s)
+    }
+
+    /** 一覧などから開かれた場合は、再生するリストを受け取っておく（通知から開かれた場合は何もしない） */
+    private fun takeLoadFrom(intent: Intent) {
+        if (intent.getBooleanExtra(PlaybackService.EXTRA_FROM_SESSION, false)) return
+        pendingLoad = playlistFromIntent(intent)
         orientationLocked = false
-        loadFromIntent(intent)
     }
 
     override fun onStart() {
         super.onStart()
-        player.attachViews(videoLayout, null, true, false)
-        viewsAttached = true
-        pendingStart?.let {
-            pendingStart = null
-            playCurrent(it, pendingPaused)
+        connection.bind()
+    }
+
+    private fun onServiceReady(s: PlaybackService) {
+        svc = s
+        s.addListener(listener)
+        s.player.attachViews(videoLayout, null, true, false)
+        s.videoUiAttached = true
+        when {
+            pendingLoad != null -> startPendingLoad(s)
+            s.currentItem == null || s.currentItem?.isAudio == true -> {
+                finish()
+                return
+            }
+            // 裏に回っていた動画に戻ってきたとき
+            s.parkedAt != null -> s.resumeParked(paused = true)
+            s.videoTrackDisabled -> s.setVideoEnabled(true)
         }
+        refreshAll()
+    }
+
+    private fun startPendingLoad(s: PlaybackService) {
+        val (items, index, shuffle) = pendingLoad ?: return
+        pendingLoad = null
+        s.load(items, index, shuffle)
+        val start = ResumeStore(this).get(items[index].key)
+        if (start > 0) showInfo("続きから再生  ${formatTime(start)}")
     }
 
     override fun onStop() {
         super.onStop()
-        // バックグラウンドに回ったら止める。戻ってきたら同じ位置から（一時停止状態で）再開する
-        if (pendingStart == null && items.isNotEmpty() && !isFinishing) {
-            pendingStart = player.time.coerceAtLeast(0)
-            pendingPaused = true
+        val s = svc
+        if (s != null) {
+            when {
+                // 戻るボタンで閉じた・ピクチャーインピクチャーの小窓を閉じた
+                isFinishing || inPip -> s.stopPlayback()
+                // 設定がオンなら音声だけ再生を続ける
+                backgroundAudio && s.isPlaying -> s.setVideoEnabled(false)
+                // 普段は止めて位置を覚えておき、戻ってきたら続きから
+                else -> s.park()
+            }
+            s.videoUiAttached = false
+            s.player.detachViews()
+            s.removeListener(listener)
         }
-        savePosition()
-        handler.removeCallbacks(saveTask)
-        player.stop()
-        player.detachViews()
-        viewsAttached = false
+        connection.unbind()
+        svc = null
     }
 
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacksAndMessages(null)
-        runCatching { unregisterReceiver(noisyReceiver) }
-        audioManager.abandonAudioFocusRequest(focusRequest)
-        player.setEventListener(null)
-        player.release()
-        libVLC.release()
-        closeFd()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -290,179 +240,19 @@ class PlayerActivity : AppCompatActivity() {
         if (hasFocus) hideSystemUi()
     }
 
-    // ---------- 読み込みと再生 ----------
+    // ---------- 表示の更新 ----------
 
-    private fun loadFromIntent(intent: Intent) {
-        val data = intent.data ?: run { finish(); return }
-        val list = Playlist.items
-        val extraIndex = intent.getIntExtra(EXTRA_INDEX, -1)
-        val idx = if (extraIndex in list.indices && list[extraIndex].uri == data) extraIndex
-        else list.indexOfFirst { it.uri == data }
-        if (idx >= 0) {
-            items = list
-            index = idx
-            shuffle = Playlist.shuffle
-        } else {
-            // 他のアプリから開かれた場合は単体再生
-            items = listOf(PlaylistItem(data, queryDisplayName(data) ?: data.lastPathSegment ?: "動画", resolvePath(data)))
-            index = 0
-            shuffle = false
-        }
-        buildOrder()
-        updateRepeatButton()
-        val start = resume.get(items[index].key)
-        if (viewsAttached) playCurrent(start, false) else {
-            pendingStart = start
-            pendingPaused = false
-        }
-        if (start > 0) showInfo("続きから再生  ${formatTime(start)}")
-    }
-
-    private fun playCurrent(startMs: Long, paused: Boolean) {
-        val item = items.getOrNull(index) ?: return
-        closeFd()
-        lengthMs = 0
-        videoW = 0
-        videoH = 0
-
-        val media = try {
-            val path = item.path
-            if (path != null && File(path).canRead()) {
-                Media(libVLC, path)
-            } else {
-                val pfd = contentResolver.openFileDescriptor(item.uri, "r") ?: throw FileNotFoundException()
-                openFd = pfd
-                Media(libVLC, pfd.fileDescriptor)
-            }
-        } catch (_: Exception) {
-            Toast.makeText(this, "ファイルを開けませんでした", Toast.LENGTH_LONG).show()
-            return
-        }
-        media.setHWDecoderEnabled(true, false)
-        if (startMs > 0) media.addOption(":start-time=${startMs / 1000.0}")
-        if (paused) media.addOption(":start-paused")
-        player.setMedia(media)
-        media.release()
-        player.play()
-
-        titleView.text = item.title
-        seekBar.progress = 0
-        timeCurrent.text = formatTime(startMs)
-        timeDuration.text = formatTime(0)
-        updateNavButtons()
-        history.add(item)
-        loadSubtitles(item)
-    }
-
-    // ---------- 再生順（シャッフル・リピート） ----------
-
-    /** 再生順を作り直す。シャッフル中は今の動画を先頭にして残りをランダムに並べる */
-    private fun buildOrder() {
-        order = if (shuffle) listOf(index) + (items.indices - index).shuffled() else items.indices.toList()
-        orderPos = order.indexOf(index).coerceAtLeast(0)
-    }
-
-    private fun playAt(pos: Int) {
-        if (pos !in order.indices) return
-        savePosition()
-        orderPos = pos
-        index = order[pos]
-        playCurrent(resume.get(items[index].key), false)
-    }
-
-    private fun hasNext() = orderPos < order.lastIndex || (repeat == Repeat.ALL && items.size > 1)
-
-    private fun playNext() {
-        when {
-            orderPos < order.lastIndex -> playAt(orderPos + 1)
-            repeat == Repeat.ALL -> {
-                // 最後まで来たら最初から（シャッフル中は並べ直す）
-                if (shuffle) order = items.indices.shuffled()
-                playAt(0)
-            }
-        }
-    }
-
-    private fun playPrevious() {
-        when {
-            player.time > 3000 || (orderPos == 0 && repeat != Repeat.ALL) -> player.setTime(0)
-            orderPos > 0 -> playAt(orderPos - 1)
-            else -> playAt(order.lastIndex)
-        }
-    }
-
-    private fun updateNavButtons() {
-        nextButton.alpha = if (hasNext()) 1f else 0.4f
-    }
-
-    private fun toggleShuffle() {
-        shuffle = !shuffle
-        buildOrder()
-        updateNavButtons()
-        showInfo(if (shuffle) "シャッフル：オン" else "シャッフル：オフ")
-    }
-
-    private fun cycleRepeat() {
-        repeat = Repeat.entries[(repeat.ordinal + 1) % Repeat.entries.size]
-        getSharedPreferences("player", MODE_PRIVATE).edit().putString("repeat", repeat.name).apply()
-        updateRepeatButton()
-        updateNavButtons()
-        showInfo(
-            when (repeat) {
-                Repeat.OFF -> "リピート：オフ"
-                Repeat.ALL -> "リピート：すべて"
-                Repeat.ONE -> "リピート：1本"
-            }
-        )
-    }
-
-    private fun updateRepeatButton() {
-        repeatButton.setImageResource(if (repeat == Repeat.ONE) R.drawable.ic_repeat_one else R.drawable.ic_repeat)
-        repeatButton.alpha = if (repeat == Repeat.OFF) 0.5f else 1f
-        repeatButton.setColorFilter(
-            if (repeat == Repeat.OFF) Color.WHITE else ContextCompat.getColor(this, R.color.accent)
-        )
-    }
-
-    /** 右上の「︙」メニュー */
-    private fun showMoreMenu() {
-        val item = items.getOrNull(index) ?: return
-        val labels = arrayOf(
-            if (shuffle) "シャッフルをオフにする" else "シャッフルをオンにする",
-            "プレイリストに追加",
-        )
-        MaterialAlertDialogBuilder(this)
-            .setItems(labels) { _, which ->
-                when (which) {
-                    0 -> toggleShuffle()
-                    1 -> PlaylistDialogs.addToPlaylist(this, listOf(item))
-                }
-            }
-            .show()
-    }
-
-    private fun closeFd() {
-        runCatching { openFd?.close() }
-        openFd = null
-    }
-
-    private fun onPlayerEvent(e: MediaPlayer.Event) {
+    private fun handleEvent(e: MediaPlayer.Event) {
         when (e.type) {
             MediaPlayer.Event.Playing -> {
                 playButton.setImageResource(R.drawable.ic_pause)
                 videoLayout.keepScreenOn = true
-                if (player.rate != rate) player.rate = rate
-                audioManager.requestAudioFocus(focusRequest)
-                handler.removeCallbacks(saveTask)
-                handler.post(saveTask)
                 scheduleHide()
                 updatePipParams()
             }
             MediaPlayer.Event.Paused -> {
                 playButton.setImageResource(R.drawable.ic_play)
                 videoLayout.keepScreenOn = false
-                handler.removeCallbacks(saveTask)
-                savePosition()
                 showControls(autoHide = false)
                 updatePipParams()
             }
@@ -472,17 +262,46 @@ class PlayerActivity : AppCompatActivity() {
             }
             MediaPlayer.Event.LengthChanged -> setLength(e.lengthChanged)
             MediaPlayer.Event.TimeChanged -> {
-                if (lengthMs <= 0) setLength(player.length)
+                if (lengthMs <= 0) svc?.let { setLength(it.lengthMs) }
                 if (!userSeeking) {
                     seekBar.progress = e.timeChanged.toInt()
                     timeCurrent.text = formatTime(e.timeChanged)
                 }
             }
             MediaPlayer.Event.Vout -> if (e.voutCount > 0) onVideoReady()
-            MediaPlayer.Event.EndReached -> onEnded()
-            MediaPlayer.Event.EncounteredError ->
-                Toast.makeText(this, "再生できませんでした", Toast.LENGTH_LONG).show()
         }
+    }
+
+    private fun refreshAll() {
+        val s = svc ?: return
+        updateItem()
+        val t = (s.parkedAt ?: s.player.time).coerceAtLeast(0)
+        seekBar.progress = t.toInt()
+        timeCurrent.text = formatTime(t)
+        playButton.setImageResource(if (s.isPlaying) R.drawable.ic_pause else R.drawable.ic_play)
+        videoLayout.keepScreenOn = s.isPlaying
+        if (s.player.videoTracksCount > 0) onVideoReady()
+    }
+
+    private fun updateItem() {
+        val s = svc ?: return
+        titleView.text = s.displayTitle()
+        lengthMs = 0
+        seekBar.progress = 0
+        timeDuration.text = formatTime(0)
+        setLength(s.lengthMs)
+        updateModes()
+    }
+
+    private fun updateModes() {
+        val s = svc ?: return
+        nextButton.alpha = if (s.hasNext()) 1f else 0.4f
+        speedButton.text = "${s.rate}x"
+        repeatButton.setImageResource(if (s.repeat == PlaybackService.Repeat.ONE) R.drawable.ic_repeat_one else R.drawable.ic_repeat)
+        repeatButton.alpha = if (s.repeat == PlaybackService.Repeat.OFF) 0.5f else 1f
+        repeatButton.setColorFilter(
+            if (s.repeat == PlaybackService.Repeat.OFF) Color.WHITE else ContextCompat.getColor(this, R.color.accent)
+        )
     }
 
     private fun setLength(ms: Long) {
@@ -490,21 +309,11 @@ class PlayerActivity : AppCompatActivity() {
         lengthMs = ms
         seekBar.max = ms.toInt()
         timeDuration.text = formatTime(ms)
-        // 履歴に長さを記録しておく（一覧で視聴位置のバーを出すため）
-        items.getOrNull(index)?.let { history.updateDuration(it.key, ms) }
-    }
-
-    private fun onEnded() {
-        items.getOrNull(index)?.let { resume.clear(it.key) }
-        when {
-            repeat == Repeat.ONE -> playCurrent(0, false)
-            hasNext() -> playNext()
-            else -> finish()
-        }
     }
 
     private fun onVideoReady() {
-        val vt = runCatching { player.currentVideoTrack }.getOrNull() ?: return
+        val s = svc ?: return
+        val vt = runCatching { s.player.currentVideoTrack }.getOrNull() ?: return
         var w = vt.width
         var h = vt.height
         if (vt.sarNum > 0 && vt.sarDen > 0) w = w * vt.sarNum / vt.sarDen
@@ -518,44 +327,11 @@ class PlayerActivity : AppCompatActivity() {
                 if (w >= h) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                 else ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
         }
-        player.setVideoScale(scales[scaleIndex].first)
+        s.player.setVideoScale(scales[scaleIndex].first)
         updatePipParams()
     }
 
-    private fun savePosition() {
-        if (!::player.isInitialized) return
-        val item = items.getOrNull(index) ?: return
-        val len = if (lengthMs > 0) lengthMs else player.length
-        val t = player.time
-        if (t < 0 || len <= 0) return
-        resume.save(item.key, t, len)
-    }
-
-    private fun togglePlay() {
-        if (player.isPlaying) player.pause() else player.play()
-    }
-
-    private fun seekBy(deltaMs: Long) {
-        val max = if (lengthMs > 0) lengthMs else Long.MAX_VALUE
-        player.setTime((player.time + deltaMs).coerceIn(0, max))
-    }
-
-    // ---------- 字幕 ----------
-
-    private fun loadSubtitles(item: PlaylistItem) {
-        val manual = addedSubtitles[item.key].orEmpty().toList()
-        val path = item.path
-        lifecycleScope.launch {
-            val auto = if (path == null) emptyList() else withContext(Dispatchers.IO) {
-                Subtitles.findFor(path).map { Subtitles.prepare(this@PlayerActivity, it) }
-            }
-            if (items.getOrNull(index) != item) return@launch
-            (manual + auto).forEachIndexed { i, f ->
-                player.addSlave(IMedia.Slave.Type.Subtitle, Uri.fromFile(f), i == 0)
-            }
-            if (auto.isNotEmpty()) showInfo("字幕を読み込みました")
-        }
-    }
+    // ---------- 字幕・音声トラック ----------
 
     private fun addSubtitleFromUri(uri: Uri) {
         lifecycleScope.launch {
@@ -566,13 +342,12 @@ class PlayerActivity : AppCompatActivity() {
                     Subtitles.saveToCache(this@PlayerActivity, name, bytes)
                 }.getOrNull()
             }
-            val item = items.getOrNull(index)
-            if (file == null || item == null) {
+            val s = svc
+            if (file == null || s == null) {
                 Toast.makeText(this@PlayerActivity, "字幕ファイルを読み込めませんでした", Toast.LENGTH_LONG).show()
                 return@launch
             }
-            addedSubtitles.getOrPut(item.key) { mutableListOf() }.add(0, file)
-            player.addSlave(IMedia.Slave.Type.Subtitle, Uri.fromFile(file), true)
+            s.addSubtitle(file)
             showInfo("字幕を読み込みました")
         }
     }
@@ -583,6 +358,7 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun showSubtitleMenu() {
+        val player = svc?.player ?: return
         val tracks = player.spuTracks ?: emptyArray()
         val current = player.spuTrack
         val labels = tracks.map { trackLabel(it, current) } +
@@ -601,6 +377,7 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun showAudioMenu() {
+        val player = svc?.player ?: return
         val tracks = player.audioTracks ?: emptyArray()
         val current = player.audioTrack
         val labels = tracks.map { trackLabel(it, current) } +
@@ -618,6 +395,7 @@ class PlayerActivity : AppCompatActivity() {
 
     /** 字幕・音声のずれを 0.1 秒単位で調整するダイアログ */
     private fun showDelayDialog(subtitle: Boolean) {
+        val player = svc?.player ?: return
         val dp = resources.displayMetrics.density
         fun current() = if (subtitle) player.spuDelay else player.audioDelay
         fun apply(us: Long) {
@@ -674,23 +452,12 @@ class PlayerActivity : AppCompatActivity() {
             .show()
     }
 
-    // ---------- 速度・画面サイズ・向き ----------
-
-    private fun showSpeedMenu() {
-        val labels = speeds.map { (if (it == rate) "✓  " else "      ") + "${it}x" }
-        MaterialAlertDialogBuilder(this)
-            .setTitle("再生速度")
-            .setItems(labels.toTypedArray()) { _, which ->
-                rate = speeds[which]
-                player.rate = rate
-                speedButton.text = "${rate}x"
-            }
-            .show()
-    }
+    // ---------- 画面サイズ・向き・その他メニュー ----------
 
     private fun cycleScale() {
+        val s = svc ?: return
         scaleIndex = (scaleIndex + 1) % scales.size
-        player.setVideoScale(scales[scaleIndex].first)
+        s.player.setVideoScale(scales[scaleIndex].first)
         showInfo(scales[scaleIndex].second)
     }
 
@@ -700,6 +467,43 @@ class PlayerActivity : AppCompatActivity() {
         requestedOrientation =
             if (isLandscape) ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
             else ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+    }
+
+    private fun cycleRepeat() {
+        val s = svc ?: return
+        s.cycleRepeat()
+        showInfo(
+            when (s.repeat) {
+                PlaybackService.Repeat.OFF -> "リピート：オフ"
+                PlaybackService.Repeat.ALL -> "リピート：すべて"
+                PlaybackService.Repeat.ONE -> "リピート：1本"
+            }
+        )
+    }
+
+    /** 右上の「︙」メニュー */
+    private fun showMoreMenu() {
+        val s = svc ?: return
+        val item = s.currentItem ?: return
+        val actions = listOf<Pair<String, () -> Unit>>(
+            (if (s.shuffle) "シャッフルをオフにする" else "シャッフルをオンにする") to {
+                s.toggleShuffle()
+                showInfo(if (s.shuffle) "シャッフル：オン" else "シャッフル：オフ")
+            },
+            "プレイリストに追加" to { PlaylistDialogs.addToPlaylist(this, listOf(item)) },
+            "再生キュー" to { PlayerDialogs.showQueue(this, s) },
+            "イコライザー" to { PlayerDialogs.showEqualizer(this, s) },
+            (PlayerDialogs.sleepLabel(s)?.let { "スリープタイマー（$it）" } ?: "スリープタイマー") to {
+                PlayerDialogs.showSleepTimer(this, s)
+            },
+            (if (backgroundAudio) "✓  画面を離れても音声を再生" else "      画面を離れても音声を再生") to {
+                backgroundAudio = !backgroundAudio
+                showInfo(if (backgroundAudio) "画面を離れても音声を再生します" else "画面を離れたら一時停止します")
+            },
+        )
+        MaterialAlertDialogBuilder(this)
+            .setItems(actions.map { it.first }.toTypedArray()) { _, which -> actions[which].second() }
+            .show()
     }
 
     // ---------- コントロールの表示 ----------
@@ -714,16 +518,16 @@ class PlayerActivity : AppCompatActivity() {
             visibility = if (hasPip) View.VISIBLE else View.GONE
             setOnClickListener { enterPip() }
         }
-        playButton.onTap { togglePlay() }
-        prevButton.onTap { playPrevious() }
-        nextButton.onTap { playNext() }
+        playButton.onTap { svc?.togglePlay() }
+        findViewById<View>(R.id.prevButton).onTap { svc?.previous() }
+        nextButton.onTap { svc?.next() }
         repeatButton.onTap { cycleRepeat() }
         findViewById<View>(R.id.moreButton).onTap { showMoreMenu() }
         findViewById<View>(R.id.lockButton).setOnClickListener { setLocked(true) }
         unlockButton.setOnClickListener { setLocked(false) }
         findViewById<View>(R.id.subtitleButton).onTap { showSubtitleMenu() }
         findViewById<View>(R.id.audioButton).onTap { showAudioMenu() }
-        speedButton.onTap { showSpeedMenu() }
+        speedButton.onTap { svc?.let { PlayerDialogs.showSpeed(this, it) { updateModes() } } }
         findViewById<View>(R.id.aspectButton).onTap { cycleScale() }
         findViewById<View>(R.id.rotateButton).onTap { toggleOrientation() }
 
@@ -738,7 +542,7 @@ class PlayerActivity : AppCompatActivity() {
             }
 
             override fun onStopTrackingTouch(sb: SeekBar) {
-                player.setTime(sb.progress.toLong())
+                svc?.seekTo(sb.progress.toLong())
                 userSeeking = false
                 scheduleHide()
             }
@@ -795,7 +599,7 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun scheduleHide() {
         handler.removeCallbacks(hideControlsTask)
-        if (controlsVisible && !userSeeking && player.isPlaying) handler.postDelayed(hideControlsTask, 4000)
+        if (controlsVisible && !userSeeking && svc?.isPlaying == true) handler.postDelayed(hideControlsTask, 4000)
     }
 
     private fun setLocked(lock: Boolean) {
@@ -844,7 +648,7 @@ class PlayerActivity : AppCompatActivity() {
             }
             builder.setAspectRatio(r)
         }
-        if (Build.VERSION.SDK_INT >= 31) builder.setAutoEnterEnabled(player.isPlaying)
+        if (Build.VERSION.SDK_INT >= 31) builder.setAutoEnterEnabled(svc?.isPlaying == true)
         return builder.build()
     }
 
@@ -859,7 +663,7 @@ class PlayerActivity : AppCompatActivity() {
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         // Android 12 以降は setAutoEnterEnabled で自動的に PiP になる
-        if (Build.VERSION.SDK_INT < 31 && player.isPlaying) enterPip()
+        if (Build.VERSION.SDK_INT < 31 && svc?.isPlaying == true) enterPip()
     }
 
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
@@ -869,6 +673,9 @@ class PlayerActivity : AppCompatActivity() {
             hideControls()
             unlockButton.visibility = View.GONE
             gestureInfo.visibility = View.GONE
+        } else if (lifecycle.currentState == Lifecycle.State.CREATED) {
+            // 小窓が閉じられた
+            finish()
         }
     }
 
@@ -889,16 +696,18 @@ class PlayerActivity : AppCompatActivity() {
             }
 
             override fun onDoubleTap(e: MotionEvent): Boolean {
+                val s = svc ?: return true
                 val w = touchLayer.width
                 when {
-                    e.x < w / 3f -> { seekBy(-10_000); showInfo("⏪  10秒") }
-                    e.x > w * 2 / 3f -> { seekBy(10_000); showInfo("10秒  ⏩") }
-                    else -> togglePlay()
+                    e.x < w / 3f -> { s.seekBy(-10_000); showInfo("⏪  10秒") }
+                    e.x > w * 2 / 3f -> { s.seekBy(10_000); showInfo("10秒  ⏩") }
+                    else -> s.togglePlay()
                 }
                 return true
             }
 
             override fun onScroll(e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
+                val s = svc ?: return false
                 if (e1 == null) return false
                 val dx = e2.x - e1.x
                 val dy = e2.y - e1.y
@@ -916,7 +725,7 @@ class PlayerActivity : AppCompatActivity() {
                         Gesture.VOLUME -> audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat()
                         else -> 0f
                     }
-                    seekStartPos = player.time.coerceAtLeast(0)
+                    seekStartPos = s.player.time.coerceAtLeast(0)
                     seekTarget = seekStartPos
                 }
                 when (gesture) {
@@ -954,7 +763,7 @@ class PlayerActivity : AppCompatActivity() {
             if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
                 val was = gesture
                 gesture = Gesture.NONE
-                if (was == Gesture.SEEK && action == MotionEvent.ACTION_UP) player.setTime(seekTarget)
+                if (was == Gesture.SEEK && action == MotionEvent.ACTION_UP) svc?.seekTo(seekTarget)
                 if (was != Gesture.NONE && was != Gesture.IGNORE) {
                     handler.removeCallbacks(hideInfo)
                     handler.postDelayed(hideInfo, 600)
@@ -972,9 +781,5 @@ class PlayerActivity : AppCompatActivity() {
         } catch (_: Exception) {
             0.5f
         }
-    }
-
-    companion object {
-        const val EXTRA_INDEX = "index"
     }
 }

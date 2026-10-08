@@ -102,10 +102,19 @@ class MediaAdapter(
                 holder.meta.visibility = if (row.meta.isEmpty()) View.GONE else View.VISIBLE
                 holder.duration.text = formatTime(item.durationMs)
                 holder.duration.visibility = if (item.durationMs > 0) View.VISIBLE else View.GONE
-                holder.thumb.load(item.path?.let { File(it) } ?: item.uri) {
-                    videoFrameMillis(1000)
-                    placeholder(R.drawable.ic_movie)
-                    error(R.drawable.ic_movie)
+                if (item.isAudio) {
+                    // 音楽はファイルに埋め込まれたジャケット画像
+                    holder.thumb.load(item.path?.let { AudioArt(it) }) {
+                        placeholder(R.drawable.ic_music_note)
+                        error(R.drawable.ic_music_note)
+                        fallback(R.drawable.ic_music_note)
+                    }
+                } else {
+                    holder.thumb.load(item.path?.let { File(it) } ?: item.uri) {
+                        videoFrameMillis(1000)
+                        placeholder(R.drawable.ic_movie)
+                        error(R.drawable.ic_movie)
+                    }
                 }
 
                 val pos = resume.get(item.key)

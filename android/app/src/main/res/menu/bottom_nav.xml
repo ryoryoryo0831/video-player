@@ -5,6 +5,10 @@
         android:icon="@drawable/ic_movie"
         android:title="@string/tab_videos" />
     <item
+        android:id="@+id/tab_music"
+        android:icon="@drawable/ic_music_note"
+        android:title="@string/tab_music" />
+    <item
         android:id="@+id/tab_folders"
         android:icon="@drawable/ic_folder"
         android:title="@string/tab_folders" />

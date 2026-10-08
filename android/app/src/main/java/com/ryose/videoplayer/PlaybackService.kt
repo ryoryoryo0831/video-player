@@ -1,0 +1,742 @@
+package com.ryose.videoplayer
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
+import android.media.MediaMetadataRetriever
+import android.net.Uri
+import android.os.Binder
+import android.os.Build
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
+import android.os.ParcelFileDescriptor
+import android.support.v4.media.MediaMetadataCompat
+import android.support.v4.media.session.MediaSessionCompat
+import android.support.v4.media.session.PlaybackStateCompat
+import android.widget.Toast
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.videolan.libvlc.LibVLC
+import org.videolan.libvlc.Media
+import org.videolan.libvlc.MediaPlayer
+import org.videolan.libvlc.interfaces.IMedia
+import java.io.File
+import java.io.FileNotFoundException
+
+/**
+ * 再生を担当するサービス。画面（動画・音楽）はこのサービスにつないで操作する。
+ * 画面を閉じても、画面を消しても再生を続け、通知・ロック画面・イヤホンのボタンから操作できる。
+ */
+class PlaybackService : Service() {
+
+    enum class Repeat { OFF, ALL, ONE }
+
+    /** 画面側が受け取る通知。必要なものだけ実装すればよい */
+    interface Listener {
+        fun onPlayerEvent(e: MediaPlayer.Event) {}
+        /** 再生する曲・動画が変わった（タイトル・ジャケットなども） */
+        fun onItemChanged() {}
+        /** シャッフル・リピート・スリープタイマーなどが変わった */
+        fun onModesChanged() {}
+        /** 再生が終わった・止められた */
+        fun onPlaybackStopped() {}
+    }
+
+    /** 曲の情報（音楽ファイルに埋め込まれたタイトル・アーティスト・ジャケット） */
+    data class TrackMeta(val title: String?, val artist: String?, val album: String?, val art: Bitmap?)
+
+    inner class LocalBinder : Binder() {
+        val service: PlaybackService get() = this@PlaybackService
+    }
+
+    private val binder = LocalBinder()
+    private val handler = Handler(Looper.getMainLooper())
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val listeners = mutableListOf<Listener>()
+
+    lateinit var libVLC: LibVLC
+        private set
+    lateinit var player: MediaPlayer
+        private set
+    private lateinit var session: MediaSessionCompat
+    private lateinit var resume: ResumeStore
+    private lateinit var history: HistoryStore
+    private lateinit var audioManager: AudioManager
+
+    var items: List<PlaylistItem> = emptyList()
+        private set
+    var index = 0
+        private set
+    /** 再生する順番（items のインデックス）。シャッフル中は並びが変わる */
+    var order: List<Int> = emptyList()
+        private set
+    var orderPos = 0
+        private set
+    var shuffle = false
+        private set
+    var repeat = Repeat.OFF
+        private set
+    var lengthMs = 0L
+        private set
+    var rate = 1f
+        private set
+    var meta: TrackMeta? = null
+        private set
+    /** スリープタイマーで止める時刻（0 なら未設定） */
+    var sleepAt = 0L
+        private set
+    /** 今の曲・動画が終わったら止める */
+    var sleepAtEnd = false
+        private set
+    /** 動画画面が裏に回ったときなど、止めて位置だけ覚えている状態 */
+    var parkedAt: Long? = null
+        private set
+    /** 動画を裏で音声だけ再生している（映像を止めている）状態 */
+    var videoTrackDisabled = false
+        private set
+    /** 動画の画面が表示されているか（表示されていない間に始まる動画は音声だけ再生する） */
+    var videoUiAttached = false
+
+    /** 動画の映像を止めて音声だけ再生する／映像を戻す */
+    fun setVideoEnabled(enabled: Boolean) {
+        if (enabled == !videoTrackDisabled) return
+        player.setVideoTrackEnabled(enabled)
+        videoTrackDisabled = !enabled
+    }
+
+    private var openFd: ParcelFileDescriptor? = null
+    /** 「字幕ファイルを追加」で読み込んだ字幕（動画ごと） */
+    private val addedSubtitles = mutableMapOf<String, MutableList<File>>()
+    private var foreground = false
+    private var pausedByFocus = false
+    private var hasFocus = false
+
+    val currentItem: PlaylistItem? get() = items.getOrNull(index)
+    val isPlaying: Boolean get() = player.isPlaying
+
+    // ---------- サービスのライフサイクル ----------
+
+    override fun onCreate() {
+        super.onCreate()
+        resume = ResumeStore(this)
+        history = HistoryStore(this)
+        audioManager = getSystemService(AudioManager::class.java)
+        repeat = runCatching { Repeat.valueOf(prefs().getString("repeat", null) ?: "OFF") }.getOrDefault(Repeat.OFF)
+
+        libVLC = LibVLC(
+            this,
+            arrayListOf(
+                "--audio-time-stretch",     // 速度を変えても声の高さを変えない
+                "--no-sub-autodetect-file", // 字幕の自動読み込みはアプリ側で行う（文字コード変換のため）
+                "--http-reconnect",
+            )
+        )
+        player = MediaPlayer(libVLC)
+        player.setEventListener(object : MediaPlayer.EventListener {
+            override fun onEvent(event: MediaPlayer.Event) = onPlayerEvent(event)
+        })
+        applyEqualizer()
+
+        session = MediaSessionCompat(this, "VideoPlayer").apply {
+            setCallback(object : MediaSessionCompat.Callback() {
+                override fun onPlay() = play()
+                override fun onPause() = pause()
+                override fun onSkipToNext() = next()
+                override fun onSkipToPrevious() = previous()
+                override fun onSeekTo(pos: Long) = seekTo(pos)
+                override fun onStop() = stopPlayback()
+            })
+        }
+
+        ContextCompat.registerReceiver(
+            this, noisyReceiver, IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+    }
+
+    override fun onBind(intent: Intent?): IBinder = binder
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_PLAY_PAUSE -> togglePlay()
+            ACTION_NEXT -> next()
+            ACTION_PREVIOUS -> previous()
+            ACTION_STOP -> stopPlayback()
+        }
+        return START_NOT_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        // 最近使ったアプリから消されたとき、再生中でなければ終了する
+        if (!player.isPlaying) stopPlayback()
+    }
+
+    override fun onDestroy() {
+        savePosition()
+        handler.removeCallbacksAndMessages(null)
+        scope.cancel()
+        runCatching { unregisterReceiver(noisyReceiver) }
+        abandonFocus()
+        session.release()
+        player.setEventListener(null)
+        player.release()
+        libVLC.release()
+        closeFd()
+        super.onDestroy()
+    }
+
+    fun addListener(l: Listener) {
+        if (l !in listeners) listeners += l
+    }
+
+    fun removeListener(l: Listener) {
+        listeners -= l
+    }
+
+    private fun dispatch(action: (Listener) -> Unit) = listeners.toList().forEach(action)
+
+    private fun prefs() = getSharedPreferences("player", MODE_PRIVATE)
+
+    // ---------- 読み込みと再生 ----------
+
+    /** 新しいプレイリストで再生を始める */
+    fun load(newItems: List<PlaylistItem>, startIndex: Int, shuffled: Boolean) {
+        if (startIndex !in newItems.indices) return
+        savePosition()
+        parkedAt = null
+        sleepAtEnd = false
+        items = newItems
+        index = startIndex
+        shuffle = shuffled
+        buildOrder()
+        // 画面から切り離されても動き続けるように「開始済み」のサービスにしておく
+        startService(Intent(this, PlaybackService::class.java))
+        playCurrent(resume.get(newItems[startIndex].key), false)
+        dispatch { it.onModesChanged() }
+    }
+
+    private fun playCurrent(startMs: Long, paused: Boolean) {
+        val item = currentItem ?: return
+        closeFd()
+        lengthMs = 0
+        meta = null
+        videoTrackDisabled = false
+
+        val media = try {
+            val path = item.path
+            if (path != null && File(path).canRead()) {
+                Media(libVLC, path)
+            } else {
+                val pfd = contentResolver.openFileDescriptor(item.uri, "r") ?: throw FileNotFoundException()
+                openFd = pfd
+                Media(libVLC, pfd.fileDescriptor)
+            }
+        } catch (_: Exception) {
+            Toast.makeText(this, "ファイルを開けませんでした：${item.title}", Toast.LENGTH_LONG).show()
+            return
+        }
+        media.setHWDecoderEnabled(true, false)
+        if (startMs > 0) media.addOption(":start-time=${startMs / 1000.0}")
+        if (paused) media.addOption(":start-paused")
+        if (!item.isAudio && !videoUiAttached) {
+            media.addOption(":no-video")
+            videoTrackDisabled = true
+        }
+        player.setMedia(media)
+        media.release()
+        player.play()
+
+        history.add(item)
+        loadSubtitles(item)
+        loadMeta(item)
+        updateSession()
+        dispatch { it.onItemChanged() }
+    }
+
+    private fun closeFd() {
+        runCatching { openFd?.close() }
+        openFd = null
+    }
+
+    fun togglePlay() {
+        if (player.isPlaying) pause() else play()
+    }
+
+    fun play() {
+        if (parkedAt != null) resumeParked(paused = false)
+        else if (currentItem != null) player.play()
+    }
+
+    fun pause() {
+        player.pause()
+    }
+
+    fun seekTo(ms: Long) {
+        val max = if (lengthMs > 0) lengthMs else Long.MAX_VALUE
+        player.setTime(ms.coerceIn(0, max))
+        updateSession()
+    }
+
+    fun seekBy(deltaMs: Long) = seekTo(player.time + deltaMs)
+
+    fun setPlaybackRate(r: Float) {
+        rate = r
+        player.rate = r
+        updateSession()
+    }
+
+    /** 動画画面が裏に回ったとき：止めて位置を覚えておく */
+    fun park() {
+        if (currentItem == null || parkedAt != null) return
+        parkedAt = player.time.coerceAtLeast(0)
+        savePosition()
+        player.stop()
+        updateSession()
+    }
+
+    /** park() した位置から再開する */
+    fun resumeParked(paused: Boolean) {
+        val t = parkedAt ?: return
+        parkedAt = null
+        playCurrent(t, paused)
+    }
+
+    /** 再生を終了して通知も消す */
+    fun stopPlayback() {
+        savePosition()
+        player.stop()
+        items = emptyList()
+        order = emptyList()
+        index = 0
+        parkedAt = null
+        lengthMs = 0
+        meta = null
+        cancelSleepTimer()
+        abandonFocus()
+        handler.removeCallbacks(saveTask)
+        session.isActive = false
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        foreground = false
+        dispatch { it.onPlaybackStopped() }
+        stopSelf()
+    }
+
+    // ---------- 再生順（シャッフル・リピート） ----------
+
+    private fun buildOrder() {
+        order = if (shuffle) listOf(index) + (items.indices - index).shuffled() else items.indices.toList()
+        orderPos = order.indexOf(index).coerceAtLeast(0)
+    }
+
+    fun playAt(pos: Int) {
+        if (pos !in order.indices) return
+        savePosition()
+        parkedAt = null
+        orderPos = pos
+        index = order[pos]
+        playCurrent(resume.get(items[index].key), false)
+    }
+
+    fun hasNext() = orderPos < order.lastIndex || (repeat == Repeat.ALL && items.size > 1)
+
+    fun next() {
+        when {
+            orderPos < order.lastIndex -> playAt(orderPos + 1)
+            repeat == Repeat.ALL && items.isNotEmpty() -> {
+                // 最後まで来たら最初から（シャッフル中は並べ直す）
+                if (shuffle) order = items.indices.shuffled()
+                playAt(0)
+            }
+        }
+    }
+
+    fun previous() {
+        when {
+            player.time > 3000 || (orderPos == 0 && repeat != Repeat.ALL) -> seekTo(0)
+            orderPos > 0 -> playAt(orderPos - 1)
+            else -> playAt(order.lastIndex)
+        }
+    }
+
+    fun toggleShuffle() {
+        shuffle = !shuffle
+        buildOrder()
+        dispatch { it.onModesChanged() }
+    }
+
+    fun cycleRepeat() {
+        repeat = Repeat.entries[(repeat.ordinal + 1) % Repeat.entries.size]
+        prefs().edit().putString("repeat", repeat.name).apply()
+        dispatch { it.onModesChanged() }
+    }
+
+    private fun onEnded() {
+        currentItem?.let { resume.clear(it.key) }
+        if (sleepAtEnd) {
+            // スリープタイマー「この曲の終わりまで」
+            sleepAtEnd = false
+            dispatch { it.onModesChanged() }
+            stopPlayback()
+            return
+        }
+        when {
+            repeat == Repeat.ONE -> playCurrent(0, false)
+            hasNext() -> next()
+            else -> stopPlayback()
+        }
+    }
+
+    // ---------- スリープタイマー ----------
+
+    private val sleepTask = Runnable {
+        sleepAt = 0
+        pause()
+        dispatch { it.onModesChanged() }
+    }
+
+    fun setSleepTimer(minutes: Int) {
+        cancelSleepTimer()
+        sleepAt = System.currentTimeMillis() + minutes * 60_000L
+        handler.postDelayed(sleepTask, minutes * 60_000L)
+        dispatch { it.onModesChanged() }
+    }
+
+    fun setSleepAtEnd() {
+        cancelSleepTimer()
+        sleepAtEnd = true
+        dispatch { it.onModesChanged() }
+    }
+
+    fun cancelSleepTimer() {
+        handler.removeCallbacks(sleepTask)
+        sleepAt = 0
+        sleepAtEnd = false
+        dispatch { it.onModesChanged() }
+    }
+
+    // ---------- イコライザー ----------
+
+    fun applyEqualizer() {
+        val s = EqualizerPrefs.load(this)
+        if (!s.enabled) {
+            player.setEqualizer(null)
+            return
+        }
+        val eq = MediaPlayer.Equalizer.create()
+        eq.setPreAmp(s.preamp)
+        s.bands.forEachIndexed { i, v -> eq.setAmp(i, v) }
+        player.setEqualizer(eq)
+    }
+
+    // ---------- プレイヤーのイベント ----------
+
+    private val saveTask = object : Runnable {
+        override fun run() {
+            savePosition()
+            handler.postDelayed(this, 2000)
+        }
+    }
+
+    private fun onPlayerEvent(e: MediaPlayer.Event) {
+        when (e.type) {
+            MediaPlayer.Event.Playing -> {
+                if (player.rate != rate) player.rate = rate
+                requestFocus()
+                handler.removeCallbacks(saveTask)
+                handler.post(saveTask)
+                updateSession()
+                startForegroundIfNeeded()
+            }
+            MediaPlayer.Event.Paused -> {
+                handler.removeCallbacks(saveTask)
+                savePosition()
+                updateSession()
+            }
+            MediaPlayer.Event.Stopped -> {
+                handler.removeCallbacks(saveTask)
+                updateSession()
+            }
+            MediaPlayer.Event.LengthChanged -> setLength(e.lengthChanged)
+            MediaPlayer.Event.TimeChanged -> if (lengthMs <= 0) setLength(player.length)
+            MediaPlayer.Event.EndReached -> {
+                // 画面側にも伝えてから次へ進む
+                dispatch { it.onPlayerEvent(e) }
+                onEnded()
+                return
+            }
+            MediaPlayer.Event.EncounteredError ->
+                Toast.makeText(this, "再生できませんでした：${currentItem?.title.orEmpty()}", Toast.LENGTH_LONG).show()
+        }
+        dispatch { it.onPlayerEvent(e) }
+    }
+
+    private fun setLength(ms: Long) {
+        if (ms <= 0 || ms == lengthMs) return
+        lengthMs = ms
+        // 履歴に長さを記録しておく（一覧で視聴位置のバーを出すため）
+        currentItem?.let { history.updateDuration(it.key, ms) }
+        updateSession()
+    }
+
+    fun savePosition() {
+        if (parkedAt != null) return
+        val item = currentItem ?: return
+        val len = if (lengthMs > 0) lengthMs else player.length
+        val t = player.time
+        if (t < 0 || len <= 0) return
+        // 普通の長さの曲は続きから再生しない（10分以上の音声＝ラジオや朗読などだけ）
+        if (item.isAudio && len < 10 * 60_000L) return
+        resume.save(item.key, t, len)
+    }
+
+    // ---------- 字幕 ----------
+
+    private fun loadSubtitles(item: PlaylistItem) {
+        if (item.isAudio) return
+        val manual = addedSubtitles[item.key].orEmpty().toList()
+        val path = item.path
+        scope.launch {
+            val auto = if (path == null) emptyList() else withContext(Dispatchers.IO) {
+                Subtitles.findFor(path).map { Subtitles.prepare(this@PlaybackService, it) }
+            }
+            if (currentItem != item) return@launch
+            (manual + auto).forEachIndexed { i, f ->
+                player.addSlave(IMedia.Slave.Type.Subtitle, Uri.fromFile(f), i == 0)
+            }
+        }
+    }
+
+    fun addSubtitle(file: File) {
+        val item = currentItem ?: return
+        addedSubtitles.getOrPut(item.key) { mutableListOf() }.add(0, file)
+        player.addSlave(IMedia.Slave.Type.Subtitle, Uri.fromFile(file), true)
+    }
+
+    // ---------- 曲の情報・ジャケット ----------
+
+    private fun loadMeta(item: PlaylistItem) {
+        scope.launch {
+            val m = withContext(Dispatchers.IO) { readMeta(item) }
+            if (currentItem != item) return@launch
+            meta = m
+            updateSession()
+            dispatch { it.onItemChanged() }
+        }
+    }
+
+    private fun readMeta(item: PlaylistItem): TrackMeta {
+        val r = MediaMetadataRetriever()
+        return try {
+            if (item.path != null) r.setDataSource(item.path) else r.setDataSource(this, item.uri)
+            val art = if (item.isAudio) r.embeddedPicture?.let { decodeArt(it) } else null
+            TrackMeta(
+                title = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)?.takeIf { item.isAudio && it.isNotBlank() },
+                artist = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)?.takeIf { it.isNotBlank() },
+                album = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)?.takeIf { it.isNotBlank() },
+                art = art,
+            )
+        } catch (_: Exception) {
+            TrackMeta(null, null, null, null)
+        } finally {
+            runCatching { r.release() }
+        }
+    }
+
+    /** ジャケット画像を 512px 程度に縮小して読み込む */
+    private fun decodeArt(bytes: ByteArray): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= 512 && bounds.outHeight / (sample * 2) >= 512) sample *= 2
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
+    }
+
+    /** 画面に表示するタイトル（曲なら埋め込みのタイトルを優先） */
+    fun displayTitle(): String = meta?.title ?: currentItem?.title.orEmpty()
+
+    fun displaySubtitle(): String = listOfNotNull(meta?.artist, meta?.album).joinToString(" · ")
+
+    // ---------- 音声フォーカス・イヤホン ----------
+
+    private val focusRequest by lazy {
+        AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+                    .build()
+            )
+            .setOnAudioFocusChangeListener { change ->
+                when (change) {
+                    AudioManager.AUDIOFOCUS_LOSS -> {
+                        hasFocus = false
+                        pause()
+                    }
+                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> if (player.isPlaying) {
+                        pausedByFocus = true
+                        pause()
+                    }
+                    AudioManager.AUDIOFOCUS_GAIN -> if (pausedByFocus) {
+                        pausedByFocus = false
+                        play()
+                    }
+                }
+            }
+            .build()
+    }
+
+    private fun requestFocus() {
+        if (hasFocus) return
+        hasFocus = audioManager.requestAudioFocus(focusRequest) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+    }
+
+    private fun abandonFocus() {
+        audioManager.abandonAudioFocusRequest(focusRequest)
+        hasFocus = false
+    }
+
+    /** イヤホンが抜けたら一時停止 */
+    private val noisyReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) pause()
+        }
+    }
+
+    // ---------- 通知・ロック画面（MediaSession） ----------
+
+    private fun updateSession() {
+        val item = currentItem ?: return
+        val playing = player.isPlaying
+        val state = PlaybackStateCompat.Builder()
+            .setActions(
+                PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_PAUSE or
+                    PlaybackStateCompat.ACTION_PLAY_PAUSE or PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
+                    PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or PlaybackStateCompat.ACTION_SEEK_TO or
+                    PlaybackStateCompat.ACTION_STOP
+            )
+            .setState(
+                if (playing) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED,
+                (parkedAt ?: player.time).coerceAtLeast(0),
+                if (playing) rate else 0f,
+            )
+            .build()
+        session.setPlaybackState(state)
+        session.setMetadata(
+            MediaMetadataCompat.Builder()
+                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, meta?.title ?: item.title)
+                .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, meta?.artist.orEmpty())
+                .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, meta?.album.orEmpty())
+                .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, lengthMs)
+                .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, meta?.art)
+                .build()
+        )
+        session.isActive = true
+        if (foreground) notifyNotification()
+    }
+
+    private fun startForegroundIfNeeded() {
+        if (foreground) {
+            notifyNotification()
+            return
+        }
+        try {
+            ServiceCompat.startForeground(
+                this, NOTIFICATION_ID, buildNotification(),
+                if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK else 0,
+            )
+            foreground = true
+        } catch (_: Exception) {
+            // バックグラウンドからの開始が制限された場合など。再生自体は続ける
+        }
+    }
+
+    private fun notifyNotification() {
+        try {
+            NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, buildNotification())
+        } catch (_: SecurityException) {
+        }
+    }
+
+    private fun serviceIntent(action: String, code: Int) = PendingIntent.getService(
+        this, code, Intent(this, PlaybackService::class.java).setAction(action),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
+
+    /** 今の曲・動画の画面を開く Intent */
+    fun screenIntent(): Intent {
+        val cls = if (currentItem?.isAudio == true) AudioPlayerActivity::class.java else PlayerActivity::class.java
+        return Intent(this, cls).putExtra(EXTRA_FROM_SESSION, true)
+    }
+
+    private fun buildNotification(): Notification {
+        val nm = getSystemService(NotificationManager::class.java)
+        if (nm.getNotificationChannel(CHANNEL_ID) == null) {
+            nm.createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, "再生中", NotificationManager.IMPORTANCE_LOW).apply {
+                    description = "再生中の曲や動画の操作"
+                    setShowBadge(false)
+                }
+            )
+        }
+        val playing = player.isPlaying
+        val open = PendingIntent.getActivity(
+            this, 0, screenIntent().addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_music_note)
+            .setContentTitle(displayTitle())
+            .setContentText(displaySubtitle())
+            .setLargeIcon(meta?.art)
+            .setContentIntent(open)
+            .setOngoing(true)
+            .setSilent(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .addAction(R.drawable.ic_skip_previous, "前へ", serviceIntent(ACTION_PREVIOUS, 1))
+            .addAction(
+                if (playing) R.drawable.ic_pause else R.drawable.ic_play,
+                if (playing) "一時停止" else "再生",
+                serviceIntent(ACTION_PLAY_PAUSE, 2),
+            )
+            .addAction(R.drawable.ic_skip_next, "次へ", serviceIntent(ACTION_NEXT, 3))
+            .addAction(R.drawable.ic_close, "終了", serviceIntent(ACTION_STOP, 4))
+            .setStyle(
+                androidx.media.app.NotificationCompat.MediaStyle()
+                    .setMediaSession(session.sessionToken)
+                    .setShowActionsInCompactView(0, 1, 2)
+            )
+            .build()
+    }
+
+    companion object {
+        const val EXTRA_FROM_SESSION = "from_session"
+        private const val CHANNEL_ID = "playback"
+        private const val NOTIFICATION_ID = 1
+        private const val ACTION_PLAY_PAUSE = "com.ryose.videoplayer.PLAY_PAUSE"
+        private const val ACTION_NEXT = "com.ryose.videoplayer.NEXT"
+        private const val ACTION_PREVIOUS = "com.ryose.videoplayer.PREVIOUS"
+        private const val ACTION_STOP = "com.ryose.videoplayer.STOP"
+    }
+}

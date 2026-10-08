@@ -39,6 +39,9 @@ data class PlaylistItem(
     /** 続きから再生・履歴・プレイリストで同じ動画を見分けるためのキー */
     val key: String get() = path ?: uri.toString()
 
+    /** 音楽ファイルかどうか（拡張子で判断） */
+    val isAudio: Boolean get() = MediaFiles.isAudioName(path ?: title)
+
     fun toJson(): JSONObject = JSONObject()
         .put("uri", uri.toString())
         .put("title", title)
@@ -64,17 +67,35 @@ object Playlist {
     var shuffle = false
 }
 
-/** 動画を再生画面で開く */
+/** 再生画面を開いて再生を始める（音楽なら音楽の画面、動画なら動画の画面） */
 fun Activity.playItems(items: List<PlaylistItem>, index: Int, shuffle: Boolean = false) {
     if (index !in items.indices) return
     Playlist.items = items
     Playlist.shuffle = shuffle
+    val cls = if (items[index].isAudio) AudioPlayerActivity::class.java else PlayerActivity::class.java
     startActivity(
-        Intent(this, PlayerActivity::class.java)
+        Intent(this, cls)
             .setData(items[index].uri)
-            .putExtra(PlayerActivity.EXTRA_INDEX, index)
+            .putExtra(EXTRA_INDEX, index)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     )
+}
+
+const val EXTRA_INDEX = "index"
+
+/**
+ * 再生画面に渡された Intent から、再生するリストと開始位置を決める。
+ * 一覧画面から来た場合は Playlist に入っているリストを使い、他のアプリから開かれた場合は単体で再生する。
+ */
+fun Context.playlistFromIntent(intent: Intent): Triple<List<PlaylistItem>, Int, Boolean>? {
+    val data = intent.data ?: return null
+    val list = Playlist.items
+    val extraIndex = intent.getIntExtra(EXTRA_INDEX, -1)
+    val idx = if (extraIndex in list.indices && list[extraIndex].uri == data) extraIndex
+    else list.indexOfFirst { it.uri == data }
+    if (idx >= 0) return Triple(list, idx, Playlist.shuffle)
+    val single = PlaylistItem(data, queryDisplayName(data) ?: data.lastPathSegment ?: "メディア", resolvePath(data))
+    return Triple(listOf(single), 0, false)
 }
 
 /** 再生位置の記憶（続きから再生） */

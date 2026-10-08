@@ -25,8 +25,15 @@
     <string name="aspect">画面サイズ</string>
     <string name="repeat">リピート</string>
     <string name="more">その他</string>
+    <string name="stop">再生を終了</string>
+    <string name="close">閉じる</string>
+    <string name="sleep_timer">スリープタイマー</string>
+    <string name="equalizer">イコライザー</string>
+    <string name="queue">再生キュー</string>
+    <string name="shuffle">シャッフル</string>
 
     <string name="tab_videos">動画</string>
+    <string name="tab_music">音楽</string>
     <string name="tab_folders">フォルダ</string>
     <string name="tab_history">履歴</string>
     <string name="tab_playlists">プレイリスト</string>

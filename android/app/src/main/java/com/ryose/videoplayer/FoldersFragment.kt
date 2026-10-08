@@ -68,11 +68,11 @@ class FoldersFragment : BaseListFragment() {
                 } else {
                     val listing = MediaFiles.list(ctx, dir)
                     listing.folders.map { Row.Folder(it.dir.name, folderInfo(it), dir = it.dir) } +
-                        listing.videos.map { Row.Media(it, "") }
+                        listing.media.map { Row.Media(it, "") }
                 }
             }
             if (dir != currentDir) return@launch
-            showRows(rows, "このフォルダには動画がありません。", R.drawable.ic_folder)
+            showRows(rows, "このフォルダには動画や音楽がありません。", R.drawable.ic_folder)
             restoreScroll?.let { list.layoutManager?.onRestoreInstanceState(it) }
         }
     }
@@ -81,6 +81,7 @@ class FoldersFragment : BaseListFragment() {
         val parts = mutableListOf<String>()
         if (f.folderCount > 0) parts += "${f.folderCount} フォルダ"
         if (f.videoCount > 0) parts += "${f.videoCount} 本の動画"
+        if (f.audioCount > 0) parts += "${f.audioCount} 曲"
         return if (parts.isEmpty()) "空" else parts.joinToString(" · ")
     }
 
@@ -119,9 +120,9 @@ class FoldersFragment : BaseListFragment() {
     private fun withFolderVideos(dir: File, action: (List<PlaylistItem>) -> Unit) {
         val ctx = requireContext()
         viewLifecycleOwner.lifecycleScope.launch {
-            val videos = withContext(Dispatchers.IO) { MediaFiles.videosIn(ctx, dir) }
+            val videos = withContext(Dispatchers.IO) { MediaFiles.mediaIn(ctx, dir) }
             if (videos.isEmpty()) {
-                android.widget.Toast.makeText(ctx, "このフォルダの直下には動画がありません", android.widget.Toast.LENGTH_SHORT).show()
+                android.widget.Toast.makeText(ctx, "このフォルダの直下には動画や音楽がありません", android.widget.Toast.LENGTH_SHORT).show()
             } else {
                 action(videos)
             }

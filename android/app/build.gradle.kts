@@ -82,6 +82,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.recyclerview:recyclerview:1.3.2")
     implementation("com.google.android.material:material:1.12.0")
+    // 通知・ロック画面・イヤホンのボタンからの操作（MediaSession）
+    implementation("androidx.media:media:1.7.0")
 
     // VLC と同じ再生エンジン
     implementation("org.videolan.android:libvlc-all:3.7.7")

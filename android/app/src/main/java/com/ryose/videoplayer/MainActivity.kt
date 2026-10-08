@@ -9,6 +9,10 @@ import android.os.Bundle
 import android.provider.Settings
 import android.view.Menu
 import android.view.MenuItem
+import android.view.View
+import android.widget.ImageButton
+import android.widget.ImageView
+import android.widget.TextView
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -20,11 +24,42 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.bottomnavigation.BottomNavigationView
+import coil.load
+import org.videolan.libvlc.MediaPlayer
+import java.io.File
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var bottomNav: BottomNavigationView
     private var currentTab = R.id.tab_videos
+
+    // ミニプレイヤー
+    private lateinit var miniPlayer: View
+    private lateinit var miniArt: ImageView
+    private lateinit var miniTitle: TextView
+    private lateinit var miniSubtitle: TextView
+    private lateinit var miniPlay: ImageButton
+    private var miniArtKey: String? = null
+
+    private val miniListener = object : PlaybackService.Listener {
+        override fun onPlayerEvent(e: MediaPlayer.Event) {
+            when (e.type) {
+                MediaPlayer.Event.Playing, MediaPlayer.Event.Paused, MediaPlayer.Event.Stopped -> updateMini()
+            }
+        }
+        override fun onItemChanged() = updateMini()
+        override fun onPlaybackStopped() = updateMini()
+    }
+
+    /** 再生サービスが動いているときだけつながる */
+    private val connection = PlaybackConnection(
+        this, autoCreate = false,
+        onConnected = { s ->
+            s.addListener(miniListener)
+            updateMini()
+        },
+        onDisconnected = { updateMini() },
+    )
 
     // 許可の結果は各タブの onResume で確認して読み込み直す
     private val permissionLauncher =
@@ -39,7 +74,7 @@ class MainActivity : AppCompatActivity() {
                 } catch (_: SecurityException) {
                 }
             }
-            playItems(uris.map { PlaylistItem(it, queryDisplayName(it) ?: it.lastPathSegment ?: "動画", resolvePath(it)) }, 0)
+            playItems(uris.map { PlaylistItem(it, queryDisplayName(it) ?: it.lastPathSegment ?: "メディア", resolvePath(it)) }, 0)
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -68,6 +103,56 @@ class MainActivity : AppCompatActivity() {
         }
         bottomNav.setOnItemReselectedListener { }
         showTab(currentTab)
+
+        miniPlayer = findViewById(R.id.miniPlayer)
+        miniArt = findViewById(R.id.miniArt)
+        miniTitle = findViewById(R.id.miniTitle)
+        miniSubtitle = findViewById(R.id.miniSubtitle)
+        miniPlay = findViewById(R.id.miniPlay)
+        miniPlayer.setOnClickListener { connection.service?.let { startActivity(it.screenIntent()) } }
+        miniPlay.setOnClickListener { connection.service?.togglePlay() }
+        findViewById<View>(R.id.miniNext).setOnClickListener { connection.service?.next() }
+        findViewById<View>(R.id.miniClose).setOnClickListener { connection.service?.stopPlayback() }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        connection.bind()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        connection.service?.removeListener(miniListener)
+        connection.unbind()
+    }
+
+    private fun updateMini() {
+        val s = connection.service
+        val item = s?.currentItem
+        if (item == null) {
+            miniPlayer.visibility = View.GONE
+            miniArtKey = null
+            return
+        }
+        miniPlayer.visibility = View.VISIBLE
+        miniTitle.text = s.displayTitle()
+        miniSubtitle.text = s.displaySubtitle().ifEmpty { if (item.isAudio) "" else "動画" }
+        miniSubtitle.visibility = if (miniSubtitle.text.isEmpty()) View.GONE else View.VISIBLE
+        miniPlay.setImageResource(if (s.isPlaying) R.drawable.ic_pause else R.drawable.ic_play)
+        // 画像は曲が変わったときだけ読み込み直す
+        val art = s.meta?.art
+        val key = item.key + (if (art != null) "#art" else "")
+        if (key != miniArtKey) {
+            miniArtKey = key
+            when {
+                art != null -> miniArt.setImageBitmap(art)
+                item.isAudio -> miniArt.setImageResource(R.drawable.ic_music_note)
+                else -> miniArt.load(item.path?.let { File(it) } ?: item.uri) {
+                    placeholder(R.drawable.ic_movie)
+                    error(R.drawable.ic_movie)
+                }
+            }
+        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -98,6 +183,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun newTab(id: Int): Fragment = when (id) {
+        R.id.tab_music -> MusicFragment()
         R.id.tab_folders -> FoldersFragment()
         R.id.tab_history -> HistoryFragment()
         R.id.tab_playlists -> PlaylistsFragment()
@@ -111,7 +197,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         if (item.itemId == R.id.action_open) {
-            openDocuments.launch(arrayOf("video/*"))
+            openDocuments.launch(arrayOf("video/*", "audio/*"))
             return true
         }
         return super.onOptionsItemSelected(item)

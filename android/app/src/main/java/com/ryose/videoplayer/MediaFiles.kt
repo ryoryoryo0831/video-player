@@ -16,7 +16,18 @@ object MediaFiles {
         "ts", "m2ts", "mts", "3gp", "3g2", "ogv", "vob", "rm", "rmvb", "asf", "divx", "xvid",
     )
 
+    val AUDIO_EXT = setOf(
+        "mp3", "m4a", "m4b", "aac", "flac", "wav", "ogg", "oga", "opus", "wma", "ape", "aif", "aiff",
+        "mka", "wv", "tta", "dsf", "dff", "ac3", "dts", "amr", "mpc",
+    )
+
     fun isVideo(f: File) = f.isFile && f.extension.lowercase() in VIDEO_EXT
+
+    fun isAudio(f: File) = f.isFile && f.extension.lowercase() in AUDIO_EXT
+
+    fun isMedia(f: File) = isVideo(f) || isAudio(f)
+
+    fun isAudioName(name: String) = name.substringAfterLast('.', "").lowercase() in AUDIO_EXT
 
     private fun visibleChildren(dir: File): List<File> =
         dir.listFiles()?.filter { !it.name.startsWith(".") } ?: emptyList()
@@ -36,8 +47,8 @@ object MediaFiles {
         }
     }
 
-    data class Folder(val dir: File, val folderCount: Int, val videoCount: Int)
-    data class Listing(val folders: List<Folder>, val videos: List<PlaylistItem>)
+    data class Folder(val dir: File, val folderCount: Int, val videoCount: Int, val audioCount: Int)
+    data class Listing(val folders: List<Folder>, val media: List<PlaylistItem>)
 
     fun list(context: Context, dir: File): Listing {
         val children = visibleChildren(dir)
@@ -45,26 +56,27 @@ object MediaFiles {
             .sortedWith(compareBy(NaturalOrder) { it.name })
             .map { d ->
                 val sub = visibleChildren(d)
-                Folder(d, sub.count { it.isDirectory }, sub.count { isVideo(it) })
+                Folder(d, sub.count { it.isDirectory }, sub.count { isVideo(it) }, sub.count { isAudio(it) })
             }
-        return Listing(folders, videosIn(context, dir, children))
+        return Listing(folders, mediaIn(context, dir, children))
     }
 
-    /** フォルダ直下の動画（名前順） */
-    fun videosIn(context: Context, dir: File, children: List<File> = visibleChildren(dir)): List<PlaylistItem> {
-        val durations = durationsIn(context, dir)
-        return children.filter { isVideo(it) }
+    /** フォルダ直下の動画・音楽（名前順） */
+    fun mediaIn(context: Context, dir: File, children: List<File> = visibleChildren(dir)): List<PlaylistItem> {
+        val durations = durationsIn(context, dir, MediaStore.Video.Media.EXTERNAL_CONTENT_URI) +
+            durationsIn(context, dir, MediaStore.Audio.Media.EXTERNAL_CONTENT_URI)
+        return children.filter { isMedia(it) }
             .sortedWith(compareBy(NaturalOrder) { it.name })
             .map { PlaylistItem.fromFile(it, durations[it.path] ?: 0) }
     }
 
-    /** MediaStore に登録されている動画なら長さが分かるので取ってくる */
+    /** MediaStore に登録されているファイルなら長さが分かるので取ってくる */
     @Suppress("DEPRECATION")
-    private fun durationsIn(context: Context, dir: File): Map<String, Long> = try {
+    private fun durationsIn(context: Context, dir: File, collection: Uri): Map<String, Long> = try {
         context.contentResolver.query(
-            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-            arrayOf(MediaStore.Video.Media.DATA, MediaStore.Video.Media.DURATION),
-            "${MediaStore.Video.Media.DATA} LIKE ?",
+            collection,
+            arrayOf(MediaStore.MediaColumns.DATA, MediaStore.MediaColumns.DURATION),
+            "${MediaStore.MediaColumns.DATA} LIKE ?",
             arrayOf("${dir.path}/%"),
             null,
         )?.use { c ->
@@ -77,6 +89,68 @@ object MediaFiles {
         } ?: emptyMap()
     } catch (_: Exception) {
         emptyMap()
+    }
+
+    /** 音楽ライブラリの1曲 */
+    data class Song(
+        val item: PlaylistItem,
+        val title: String,
+        val artist: String,
+        val album: String,
+        val albumId: Long,
+        val track: Int,
+    )
+
+    /** 端末内のすべての曲（MediaStore から。着信音などは除く） */
+    @Suppress("DEPRECATION")
+    fun queryAllSongs(context: Context): List<Song> {
+        val collection: Uri =
+            if (Build.VERSION.SDK_INT >= 29) MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
+            else MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+        val projection = arrayOf(
+            MediaStore.Audio.Media._ID,
+            MediaStore.Audio.Media.DATA,
+            MediaStore.Audio.Media.TITLE,
+            MediaStore.Audio.Media.ARTIST,
+            MediaStore.Audio.Media.ALBUM,
+            MediaStore.Audio.Media.ALBUM_ID,
+            MediaStore.Audio.Media.TRACK,
+            MediaStore.Audio.Media.DURATION,
+        )
+        val result = mutableListOf<Song>()
+        try {
+            context.contentResolver.query(
+                collection, projection, "${MediaStore.Audio.Media.IS_MUSIC} != 0", null, null,
+            )?.use { c ->
+                val idCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
+                val dataCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)
+                val titleCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
+                val artistCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
+                val albumCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
+                val albumIdCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
+                val trackCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.TRACK)
+                val durCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
+                while (c.moveToNext()) {
+                    val path = c.getString(dataCol)
+                    val title = c.getString(titleCol)?.takeIf { it.isNotBlank() }
+                        ?: path?.let { File(it).nameWithoutExtension } ?: "(名前なし)"
+                    val artist = c.getString(artistCol)?.takeIf { it.isNotBlank() && it != "<unknown>" } ?: "不明なアーティスト"
+                    val album = c.getString(albumCol)?.takeIf { it.isNotBlank() } ?: "不明なアルバム"
+                    val uri = ContentUris.withAppendedId(collection, c.getLong(idCol))
+                    result += Song(
+                        item = PlaylistItem(uri, title, path, c.getLong(durCol)),
+                        title = title,
+                        artist = artist,
+                        album = album,
+                        albumId = c.getLong(albumIdCol),
+                        // TRACK は「ディスク番号×1000＋曲番号」の形式
+                        track = c.getInt(trackCol) % 1000,
+                    )
+                }
+            }
+        } catch (_: Exception) {
+        }
+        return result
     }
 
     /** 端末内のすべての動画（MediaStore から） */
