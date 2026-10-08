@@ -65,6 +65,12 @@ class MainActivity : AppCompatActivity() {
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
+    /** 動画・音楽の一覧を読む許可。断られた（二度と聞けない）ときは、ほかの方法を案内する */
+    private val mediaPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+            if (result.values.none { it }) showAccessChoices()
+        }
+
     private val openDocuments =
         registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
             if (uris.isEmpty()) return@registerForActivityResult
@@ -209,6 +215,25 @@ class MainActivity : AppCompatActivity() {
             return true
         }
         return super.onOptionsItemSelected(item)
+    }
+
+    /** 動画・音楽タブの「アクセスを許可」 */
+    fun requestMediaAccess() {
+        mediaPermissionLauncher.launch(mediaPermissions())
+    }
+
+    private fun showAccessChoices() {
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle("アクセスが許可されていません")
+            .setMessage("端末の設定でこのアプリの「権限」から「音楽とオーディオ」「写真と動画」を許可するか、「すべてのファイルへのアクセス」を許可してください。")
+            .setPositiveButton("アプリの設定を開く") { _, _ ->
+                runCatching {
+                    startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+                }
+            }
+            .setNeutralButton("すべてのファイル") { _, _ -> requestStorageAccess() }
+            .setNegativeButton("キャンセル", null)
+            .show()
     }
 
     fun requestStorageAccess() {

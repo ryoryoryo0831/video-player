@@ -205,6 +205,12 @@ class FoldersFragment : BaseListFragment() {
         startDiscovery()
     }
 
+    override fun onGrantClick() {
+        (activity as? MainActivity)?.requestStorageAccess()
+    }
+
+    override val needPermissionText: Int get() = R.string.need_permission
+
     private fun renderTop() {
         if (current != null || !isAdded) return
         val ctx = requireContext()

@@ -131,6 +131,31 @@ class ResumeStore(context: Context) {
     }
 }
 
+/**
+ * 動画・音楽の一覧（MediaStore）を読めるか。
+ * 「すべてのファイルへのアクセス」が無くても、「音楽とオーディオ」「写真と動画」の許可があれば読める（Android TV など向け）
+ */
+fun Context.hasMediaAccess(audio: Boolean): Boolean {
+    if (hasStorageAccess()) return true
+    fun granted(p: String) = ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
+    return when {
+        Build.VERSION.SDK_INT >= 33 && audio -> granted(Manifest.permission.READ_MEDIA_AUDIO)
+        Build.VERSION.SDK_INT >= 33 -> granted(Manifest.permission.READ_MEDIA_VIDEO) ||
+            (Build.VERSION.SDK_INT >= 34 && granted(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED))
+        else -> granted(Manifest.permission.READ_EXTERNAL_STORAGE)
+    }
+}
+
+/** 動画・音楽の一覧を読むために求める許可 */
+fun mediaPermissions(): Array<String> = when {
+    Build.VERSION.SDK_INT >= 34 -> arrayOf(
+        Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_AUDIO,
+        Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
+    )
+    Build.VERSION.SDK_INT >= 33 -> arrayOf(Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_AUDIO)
+    else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+}
+
 /** 端末内のファイルを読めるか（Android 11 以降は「すべてのファイルへのアクセス」） */
 fun Context.hasStorageAccess(): Boolean =
     if (Build.VERSION.SDK_INT >= 30) Environment.isExternalStorageManager()
@@ -157,7 +182,7 @@ fun Context.queryDisplayName(uri: Uri): String? = try {
 @Suppress("DEPRECATION")
 fun Context.resolvePath(uri: Uri): String? {
     if (uri.scheme == "file") return uri.path
-    if (uri.authority != MediaStore.AUTHORITY || !hasStorageAccess()) return null
+    if (uri.authority != MediaStore.AUTHORITY || !(hasMediaAccess(false) || hasMediaAccess(true))) return null
     return try {
         contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)?.use { c ->
             if (c.moveToFirst()) c.getString(0) else null

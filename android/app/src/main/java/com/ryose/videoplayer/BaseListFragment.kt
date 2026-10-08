@@ -38,7 +38,7 @@ abstract class BaseListFragment : Fragment(R.layout.fragment_list) {
         adapter = MediaAdapter(resume, ::onRowClick, ::onRowLongClick)
         list.layoutManager = LinearLayoutManager(requireContext())
         list.adapter = adapter
-        grantButton.setOnClickListener { (activity as? MainActivity)?.requestStorageAccess() }
+        grantButton.setOnClickListener { onGrantClick() }
     }
 
     override fun onResume() {
@@ -71,10 +71,17 @@ abstract class BaseListFragment : Fragment(R.layout.fragment_list) {
         updateSubtitle()
     }
 
+    /** 「アクセスを許可」が押されたとき（動画・音楽タブは一覧を読む許可、フォルダタブはすべてのファイル） */
+    protected open fun onGrantClick() {
+        (activity as? MainActivity)?.requestMediaAccess()
+    }
+
+    protected open val needPermissionText: Int get() = R.string.need_media_permission
+
     protected fun showNeedPermission() {
         loading.visibility = View.GONE
         adapter.rows = emptyList()
-        emptyText.setText(R.string.need_permission)
+        emptyText.setText(needPermissionText)
         emptyIcon.setImageResource(R.drawable.ic_folder)
         grantButton.visibility = View.VISIBLE
         emptyView.visibility = View.VISIBLE

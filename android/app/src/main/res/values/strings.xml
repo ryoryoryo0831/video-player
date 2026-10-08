@@ -10,6 +10,7 @@
     <string name="sort_duration">長い順</string>
     <string name="refresh">再読み込み</string>
     <string name="need_permission">VLC と同じように、端末内の動画と、その隣にある字幕ファイルを読み込むため、「すべてのファイルへのアクセス」を許可してください。\n\n次の画面でこのアプリのスイッチをオンにして、戻ってきてください。</string>
+    <string name="need_media_permission">端末内の動画・音楽を一覧に表示するには、アクセスの許可が必要です。\n\n「すべてのファイルへのアクセス」を許可すると、動画の隣にある字幕ファイルも自動で読み込めます。</string>
     <string name="grant_permission">アクセスを許可</string>
     <string name="no_videos">動画が見つかりませんでした。</string>
     <string name="back">戻る</string>

@@ -38,9 +38,13 @@ data class Server(
     val uri: Uri
         get() = Uri.Builder()
             .scheme(scheme)
-            .encodedAuthority(host + (port?.let { ":$it" } ?: ""))
+            .encodedAuthority(hostForUri + (port?.let { ":$it" } ?: ""))
             .path(path.ifEmpty { "/" })
             .build()
+
+    /** IPv6 アドレス（fe80::1 など）は URL では [ ] で囲む */
+    private val hostForUri: String
+        get() = if (':' in host && !host.startsWith("[")) "[$host]" else host
 
     /** 画面に出す説明（パスワードは出さない） */
     val label: String get() = "${PROTOCOLS[scheme] ?: scheme} · $host${port?.let { ":$it" } ?: ""}${path.takeIf { it != "/" }.orEmpty()}"
@@ -77,16 +81,25 @@ data class Server(
 class ServerStore(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("servers", Context.MODE_PRIVATE)
 
+    /** パスワードは暗号化して保存し、読み出すときに元に戻す */
     fun all(): List<Server> = try {
         val arr = JSONArray(prefs.getString("list", "[]"))
-        (0 until arr.length()).map { Server.fromJson(arr.getJSONObject(it)) }
+        val stored = (0 until arr.length()).map { Server.fromJson(arr.getJSONObject(it)) }
+        val list = stored.map { it.copy(password = Secrets.decrypt(it.password)) }
+        // 以前のバージョンで暗号化せずに保存したパスワードがあれば、暗号化して保存し直す
+        if (stored.any { it.password.isNotEmpty() && !Secrets.isEncrypted(it.password) }) save(list)
+        list
     } catch (_: Exception) {
         emptyList()
     }
 
     private fun save(list: List<Server>) {
         val arr = JSONArray()
-        list.forEach { arr.put(it.toJson()) }
+        list.forEach { s ->
+            // 暗号化できない（鍵保管庫が使えない）場合は、パスワードを保存しない
+            val enc = runCatching { Secrets.encrypt(s.password) }.getOrDefault("")
+            arr.put(s.copy(password = enc).toJson())
+        }
         prefs.edit().putString("list", arr.toString()).apply()
     }
 

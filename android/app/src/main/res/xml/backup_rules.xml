@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- サーバーのログイン情報はバックアップしない（暗号化の鍵はこの端末にしか無いため） -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="servers.xml" />
+</full-backup-content>

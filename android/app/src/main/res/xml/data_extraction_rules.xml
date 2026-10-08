@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- サーバーのログイン情報はバックアップ・機種変更の引き継ぎに含めない -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="servers.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="servers.xml" />
+    </device-transfer>
+</data-extraction-rules>

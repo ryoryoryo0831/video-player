@@ -1,7 +1,6 @@
 package com.ryose.videoplayer
 
 import android.content.Context
-import android.icu.text.CharsetDetector
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
@@ -120,7 +119,7 @@ object Subtitles {
 
     /**
      * UTF-8 ではない字幕の文字コードを推測する。
-     * 日本語（Shift_JIS・EUC-JP）を優先し、それ以外は ICU の判定（欧米の Windows-1252 など）に任せる
+     * 日本語（Shift_JIS・EUC-JP）を優先し、日本語らしくなければ欧米の字幕でよく使われる Windows-1252 とみなす
      */
     private fun detectCharset(bytes: ByteArray): Charset {
         val sjis = runCatching { Charset.forName("windows-31j") }.getOrElse { Charset.forName("Shift_JIS") }
@@ -128,10 +127,10 @@ object Subtitles {
             val text = strictDecode(bytes, cs) ?: continue
             if (looksJapanese(text)) return cs
         }
-        val guess = runCatching {
-            CharsetDetector().setText(bytes).detect()?.name?.let { Charset.forName(it) }
-        }.getOrNull()
-        return guess ?: sjis
+        // ほとんどが半角英数字なら、欧米の言語（アクセント付きの文字などだけが 0x80 以上）
+        val high = bytes.count { it < 0 }
+        if (high * 10 < bytes.size) runCatching { Charset.forName("windows-1252") }.getOrNull()?.let { return it }
+        return sjis
     }
 
     private fun strictDecode(bytes: ByteArray, cs: Charset): String? = try {

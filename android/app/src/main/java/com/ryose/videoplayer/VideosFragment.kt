@@ -86,7 +86,7 @@ class VideosFragment : BaseListFragment() {
         super.onResume()
         applyLayout()
         updateChips()
-        if (!loaded || requireContext().hasStorageAccess() != loadedWithAccess) load() else applyFilter()
+        if (!loaded || requireContext().hasMediaAccess(audio = false) != loadedWithAccess) load() else applyFilter()
     }
 
     override fun onPause() {
@@ -123,7 +123,7 @@ class VideosFragment : BaseListFragment() {
 
     private fun load() {
         val ctx = requireContext()
-        loadedWithAccess = ctx.hasStorageAccess()
+        loadedWithAccess = ctx.hasMediaAccess(audio = false)
         if (!loadedWithAccess) {
             showNeedPermission()
             return

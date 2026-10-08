@@ -60,7 +60,7 @@ class MusicFragment : BaseListFragment() {
     override fun onResume() {
         super.onResume()
         backCallback.isEnabled = opened != null
-        if (!loaded || requireContext().hasStorageAccess() != loadedWithAccess) load()
+        if (!loaded || requireContext().hasMediaAccess(audio = true) != loadedWithAccess) load()
     }
 
     override fun onPause() {
@@ -72,7 +72,7 @@ class MusicFragment : BaseListFragment() {
 
     private fun load() {
         val ctx = requireContext()
-        loadedWithAccess = ctx.hasStorageAccess()
+        loadedWithAccess = ctx.hasMediaAccess(audio = true)
         if (!loadedWithAccess) {
             showNeedPermission()
             return
