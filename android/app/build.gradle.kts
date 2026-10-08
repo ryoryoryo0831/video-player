@@ -67,6 +67,10 @@ android {
     lint {
         checkReleaseBuilds = false
     }
+    testOptions {
+        // テストでは Android の部品は使わない（呼ばれても既定値を返す）
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 kotlin {
@@ -89,6 +93,9 @@ dependencies {
     // VLC と同じ再生エンジン
     implementation("org.videolan.android:libvlc-all:3.7.7")
 
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+
     implementation("io.coil-kt:coil:2.7.0")
-    implementation("io.coil-kt:coil-video:2.7.0")
+
+    testImplementation("junit:junit:4.13.2")
 }
