@@ -46,10 +46,28 @@
             android:textSize="16sp" />
 
         <ImageButton
+            android:id="@+id/aspectButton"
+            style="@style/PlayerButton"
+            android:contentDescription="@string/aspect"
+            android:src="@drawable/ic_aspect" />
+
+        <ImageButton
+            android:id="@+id/rotateButton"
+            style="@style/PlayerButton"
+            android:contentDescription="@string/rotate"
+            android:src="@drawable/ic_rotate" />
+
+        <ImageButton
             android:id="@+id/pipButton"
             style="@style/PlayerButton"
             android:contentDescription="@string/pip"
             android:src="@drawable/ic_pip" />
+
+        <ImageButton
+            android:id="@+id/moreButton"
+            style="@style/PlayerButton"
+            android:contentDescription="@string/more"
+            android:src="@drawable/ic_more" />
     </LinearLayout>
 
     <!-- 下部コントロール -->
@@ -62,7 +80,7 @@
         android:clickable="true"
         android:focusable="false"
         android:orientation="vertical"
-        android:paddingHorizontal="8dp"
+        android:paddingHorizontal="4dp"
         android:paddingTop="32dp"
         android:paddingBottom="8dp">
 
@@ -130,7 +148,7 @@
                 style="@style/PlayerButton"
                 android:layout_width="56dp"
                 android:layout_height="56dp"
-                android:layout_marginHorizontal="8dp"
+                android:layout_marginHorizontal="4dp"
                 android:contentDescription="@string/play_pause"
                 android:scaleType="fitCenter"
                 android:padding="10dp"
@@ -162,16 +180,11 @@
                 android:textStyle="bold" />
 
             <ImageButton
-                android:id="@+id/aspectButton"
+                android:id="@+id/repeatButton"
                 style="@style/PlayerButton"
-                android:contentDescription="@string/aspect"
-                android:src="@drawable/ic_aspect" />
-
-            <ImageButton
-                android:id="@+id/rotateButton"
-                style="@style/PlayerButton"
-                android:contentDescription="@string/rotate"
-                android:src="@drawable/ic_rotate" />
+                android:alpha="0.5"
+                android:contentDescription="@string/repeat"
+                android:src="@drawable/ic_repeat" />
         </LinearLayout>
     </LinearLayout>
 

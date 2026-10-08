@@ -74,4 +74,16 @@
             android:textColor="@color/text_muted"
             android:textSize="12sp" />
     </LinearLayout>
+
+    <!-- プレイリスト画面で並べ替えるときのつまみ -->
+    <ImageView
+        android:id="@+id/dragHandle"
+        android:layout_width="40dp"
+        android:layout_height="48dp"
+        android:layout_marginStart="4dp"
+        android:alpha="0.6"
+        android:contentDescription="@string/reorder"
+        android:scaleType="center"
+        android:src="@drawable/ic_drag"
+        android:visibility="gone" />
 </LinearLayout>

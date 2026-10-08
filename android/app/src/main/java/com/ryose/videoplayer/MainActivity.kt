@@ -1,55 +1,34 @@
 package com.ryose.videoplayer
 
 import android.Manifest
-import android.content.ContentUris
 import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.provider.MediaStore
 import android.provider.Settings
 import android.view.Menu
 import android.view.MenuItem
-import android.view.View
-import android.widget.Button
-import android.widget.ProgressBar
-import android.widget.TextView
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.appcompat.widget.SearchView
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
-import androidx.lifecycle.lifecycleScope
-import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.recyclerview.widget.RecyclerView
+import androidx.fragment.app.Fragment
+import androidx.lifecycle.Lifecycle
 import com.google.android.material.appbar.MaterialToolbar
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import com.google.android.material.bottomnavigation.BottomNavigationView
 
 class MainActivity : AppCompatActivity() {
 
-    private enum class Sort { DATE, NAME, DURATION }
+    private lateinit var bottomNav: BottomNavigationView
+    private var currentTab = R.id.tab_videos
 
-    private lateinit var adapter: VideoAdapter
-    private lateinit var resume: ResumeStore
-    private lateinit var listView: RecyclerView
-    private lateinit var emptyView: View
-    private lateinit var emptyText: TextView
-    private lateinit var grantButton: Button
-    private lateinit var loading: ProgressBar
-
-    private var allVideos: List<Video> = emptyList()
-    private var query = ""
-    private var sort = Sort.DATE
-    private var hadAccess = false
-
+    // 許可の結果は各タブの onResume で確認して読み込み直す
     private val permissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { loadVideos() }
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
     private val openDocuments =
         registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -60,7 +39,7 @@ class MainActivity : AppCompatActivity() {
                 } catch (_: SecurityException) {
                 }
             }
-            play(uris.map { PlaylistItem(it, queryDisplayName(it) ?: it.lastPathSegment ?: "動画", resolvePath(it)) }, 0)
+            playItems(uris.map { PlaylistItem(it, queryDisplayName(it) ?: it.lastPathSegment ?: "動画", resolvePath(it)) }, 0)
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -72,81 +51,73 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
         setSupportActionBar(findViewById<MaterialToolbar>(R.id.toolbar))
 
-        resume = ResumeStore(this)
-        listView = findViewById(R.id.list)
-        emptyView = findViewById(R.id.emptyView)
-        emptyText = findViewById(R.id.emptyText)
-        grantButton = findViewById(R.id.grantButton)
-        loading = findViewById(R.id.loading)
-
-        adapter = VideoAdapter(resume) { position ->
-            val shown = adapter.items
-            if (position in shown.indices) play(shown.map { PlaylistItem(it.uri, it.title, it.path) }, position)
-        }
-        listView.layoutManager = LinearLayoutManager(this)
-        listView.adapter = adapter
-
-        grantButton.setOnClickListener { requestStorageAccess() }
-        findViewById<Button>(R.id.openButton).setOnClickListener { openDocuments.launch(arrayOf("video/*")) }
-
         // Android 15 以降の全画面表示に合わせて、ステータスバー等の分だけ余白をとる
+        // （下のナビゲーションバーの分は BottomNavigationView が自分で余白をとる）
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.root)) { v, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             v.updatePadding(left = bars.left, top = bars.top, right = bars.right)
-            listView.updatePadding(bottom = bars.bottom)
             insets
         }
 
-        hadAccess = hasStorageAccess()
-        loadVideos()
+        bottomNav = findViewById(R.id.bottomNav)
+        currentTab = savedInstanceState?.getInt(KEY_TAB, R.id.tab_videos) ?: R.id.tab_videos
+        bottomNav.selectedItemId = currentTab
+        bottomNav.setOnItemSelectedListener {
+            showTab(it.itemId)
+            true
+        }
+        bottomNav.setOnItemReselectedListener { }
+        showTab(currentTab)
     }
 
-    override fun onResume() {
-        super.onResume()
-        // 設定画面でアクセスを許可して戻ってきたら読み込み直す
-        val access = hasStorageAccess()
-        if (access != hadAccess) {
-            hadAccess = access
-            loadVideos()
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putInt(KEY_TAB, currentTab)
+    }
+
+    /** タブを切り替える。見えていないタブは一時停止状態にして、メニューや「戻る」が混ざらないようにする */
+    private fun showTab(id: Int) {
+        currentTab = id
+        val fm = supportFragmentManager
+        val tag = "tab_$id"
+        val tx = fm.beginTransaction().setReorderingAllowed(true)
+        var target = fm.findFragmentByTag(tag)
+        fm.fragments.filter { it != target }.forEach {
+            tx.hide(it)
+            tx.setMaxLifecycle(it, Lifecycle.State.STARTED)
         }
-        // 再生画面から戻ったとき、視聴位置のバーを更新
-        adapter.notifyDataSetChanged()
+        if (target == null) {
+            target = newTab(id)
+            tx.add(R.id.container, target, tag)
+        } else {
+            tx.show(target)
+        }
+        tx.setMaxLifecycle(target, Lifecycle.State.RESUMED)
+        tx.commit()
+        supportActionBar?.subtitle = null
+    }
+
+    private fun newTab(id: Int): Fragment = when (id) {
+        R.id.tab_folders -> FoldersFragment()
+        R.id.tab_history -> HistoryFragment()
+        R.id.tab_playlists -> PlaylistsFragment()
+        else -> VideosFragment()
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.main_menu, menu)
-        val searchView = menu.findItem(R.id.action_search).actionView as SearchView
-        searchView.queryHint = getString(R.string.search)
-        searchView.setOnQueryTextListener(object : SearchView.OnQueryTextListener {
-            override fun onQueryTextSubmit(q: String?) = true
-            override fun onQueryTextChange(q: String?): Boolean {
-                query = q.orEmpty()
-                applyFilter()
-                return true
-            }
-        })
         return true
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
-        when (item.itemId) {
-            R.id.action_open -> openDocuments.launch(arrayOf("video/*"))
-            R.id.action_refresh -> if (hasStorageAccess()) loadVideos() else requestStorageAccess()
-            R.id.sort_date -> setSort(item, Sort.DATE)
-            R.id.sort_name -> setSort(item, Sort.NAME)
-            R.id.sort_duration -> setSort(item, Sort.DURATION)
-            else -> return super.onOptionsItemSelected(item)
+        if (item.itemId == R.id.action_open) {
+            openDocuments.launch(arrayOf("video/*"))
+            return true
         }
-        return true
+        return super.onOptionsItemSelected(item)
     }
 
-    private fun setSort(item: MenuItem, s: Sort) {
-        item.isChecked = true
-        sort = s
-        applyFilter()
-    }
-
-    private fun requestStorageAccess() {
+    fun requestStorageAccess() {
         if (Build.VERSION.SDK_INT >= 30) {
             try {
                 startActivity(
@@ -160,93 +131,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun play(items: List<PlaylistItem>, index: Int) {
-        Playlist.items = items
-        startActivity(
-            Intent(this, PlayerActivity::class.java)
-                .setData(items[index].uri)
-                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        )
-    }
-
-    private fun loadVideos() {
-        if (!hasStorageAccess()) {
-            showEmpty(getString(R.string.need_permission), showGrant = true)
-            return
-        }
-        loading.visibility = View.VISIBLE
-        lifecycleScope.launch {
-            allVideos = withContext(Dispatchers.IO) { queryVideos() }
-            loading.visibility = View.GONE
-            applyFilter()
-        }
-    }
-
-    private fun applyFilter() {
-        if (!hasStorageAccess()) return
-        val filtered = allVideos
-            .filter { query.isBlank() || it.title.contains(query, ignoreCase = true) || it.folder.contains(query, ignoreCase = true) }
-            .let { list ->
-                when (sort) {
-                    Sort.DATE -> list.sortedByDescending { it.dateAdded }
-                    Sort.NAME -> list.sortedBy { it.title.lowercase() }
-                    Sort.DURATION -> list.sortedByDescending { it.durationMs }
-                }
-            }
-        adapter.items = filtered
-        if (filtered.isEmpty()) showEmpty(getString(R.string.no_videos), showGrant = false)
-        else {
-            emptyView.visibility = View.GONE
-            listView.visibility = View.VISIBLE
-        }
-        supportActionBar?.subtitle = if (allVideos.isEmpty()) null else "${filtered.size} 本の動画"
-    }
-
-    private fun showEmpty(message: String, showGrant: Boolean) {
-        emptyText.text = message
-        grantButton.visibility = if (showGrant) View.VISIBLE else View.GONE
-        emptyView.visibility = View.VISIBLE
-        listView.visibility = View.GONE
-    }
-
-    @Suppress("DEPRECATION")
-    private fun queryVideos(): List<Video> {
-        val collection: Uri =
-            if (Build.VERSION.SDK_INT >= 29) MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
-            else MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-        val projection = arrayOf(
-            MediaStore.Video.Media._ID,
-            MediaStore.Video.Media.DATA,
-            MediaStore.Video.Media.DISPLAY_NAME,
-            MediaStore.Video.Media.DURATION,
-            MediaStore.Video.Media.SIZE,
-            MediaStore.Video.Media.BUCKET_DISPLAY_NAME,
-            MediaStore.Video.Media.DATE_ADDED,
-        )
-        val result = mutableListOf<Video>()
-        try {
-            contentResolver.query(collection, projection, null, null, null)?.use { c ->
-                val idCol = c.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
-                val dataCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DATA)
-                val nameCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
-                val durCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)
-                val sizeCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE)
-                val folderCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
-                val dateCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_ADDED)
-                while (c.moveToNext()) {
-                    result += Video(
-                        uri = ContentUris.withAppendedId(collection, c.getLong(idCol)),
-                        path = c.getString(dataCol),
-                        title = c.getString(nameCol) ?: "(名前なし)",
-                        durationMs = c.getLong(durCol),
-                        size = c.getLong(sizeCol),
-                        folder = c.getString(folderCol) ?: "",
-                        dateAdded = c.getLong(dateCol),
-                    )
-                }
-            }
-        } catch (_: Exception) {
-        }
-        return result
+    private companion object {
+        const val KEY_TAB = "tab"
     }
 }

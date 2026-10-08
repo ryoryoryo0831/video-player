@@ -60,6 +60,9 @@ class PlayerActivity : AppCompatActivity() {
 
     private enum class Gesture { NONE, IGNORE, BRIGHTNESS, VOLUME, SEEK }
 
+    /** リピート：しない → 全体 → 1本 の順に切り替わる */
+    private enum class Repeat { OFF, ALL, ONE }
+
     private lateinit var libVLC: LibVLC
     private lateinit var player: MediaPlayer
     private lateinit var videoLayout: VLCVideoLayout
@@ -74,9 +77,11 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var prevButton: ImageButton
     private lateinit var nextButton: ImageButton
     private lateinit var speedButton: TextView
+    private lateinit var repeatButton: ImageButton
     private lateinit var unlockButton: ImageButton
     private lateinit var gestureInfo: TextView
     private lateinit var resume: ResumeStore
+    private lateinit var history: HistoryStore
     private lateinit var audioManager: AudioManager
 
     private val handler = Handler(Looper.getMainLooper())
@@ -85,6 +90,11 @@ class PlayerActivity : AppCompatActivity() {
     // プレイリスト
     private var items: List<PlaylistItem> = emptyList()
     private var index = 0
+    /** 再生する順番（items のインデックス）。シャッフル中は並びが変わる */
+    private var order: List<Int> = emptyList()
+    private var orderPos = 0
+    private var shuffle = false
+    private var repeat = Repeat.OFF
     private var openFd: ParcelFileDescriptor? = null
     /** 「字幕ファイルを追加」で読み込んだ字幕（動画ごと） */
     private val addedSubtitles = mutableMapOf<String, MutableList<File>>()
@@ -195,10 +205,15 @@ class PlayerActivity : AppCompatActivity() {
         prevButton = findViewById(R.id.prevButton)
         nextButton = findViewById(R.id.nextButton)
         speedButton = findViewById(R.id.speedButton)
+        repeatButton = findViewById(R.id.repeatButton)
         unlockButton = findViewById(R.id.unlockButton)
         gestureInfo = findViewById(R.id.gestureInfo)
         resume = ResumeStore(this)
+        history = HistoryStore(this)
         audioManager = getSystemService(AudioManager::class.java)
+        repeat = runCatching {
+            Repeat.valueOf(getSharedPreferences("player", MODE_PRIVATE).getString("repeat", null) ?: "OFF")
+        }.getOrDefault(Repeat.OFF)
 
         libVLC = LibVLC(
             this,
@@ -280,15 +295,21 @@ class PlayerActivity : AppCompatActivity() {
     private fun loadFromIntent(intent: Intent) {
         val data = intent.data ?: run { finish(); return }
         val list = Playlist.items
-        val idx = list.indexOfFirst { it.uri == data }
+        val extraIndex = intent.getIntExtra(EXTRA_INDEX, -1)
+        val idx = if (extraIndex in list.indices && list[extraIndex].uri == data) extraIndex
+        else list.indexOfFirst { it.uri == data }
         if (idx >= 0) {
             items = list
             index = idx
+            shuffle = Playlist.shuffle
         } else {
             // 他のアプリから開かれた場合は単体再生
             items = listOf(PlaylistItem(data, queryDisplayName(data) ?: data.lastPathSegment ?: "動画", resolvePath(data)))
             index = 0
+            shuffle = false
         }
+        buildOrder()
+        updateRepeatButton()
         val start = resume.get(items[index].key)
         if (viewsAttached) playCurrent(start, false) else {
             pendingStart = start
@@ -328,16 +349,96 @@ class PlayerActivity : AppCompatActivity() {
         seekBar.progress = 0
         timeCurrent.text = formatTime(startMs)
         timeDuration.text = formatTime(0)
-        prevButton.alpha = if (index > 0) 1f else 0.4f
-        nextButton.alpha = if (index < items.lastIndex) 1f else 0.4f
+        updateNavButtons()
+        history.add(item)
         loadSubtitles(item)
     }
 
-    private fun playIndex(i: Int) {
-        if (i !in items.indices) return
+    // ---------- 再生順（シャッフル・リピート） ----------
+
+    /** 再生順を作り直す。シャッフル中は今の動画を先頭にして残りをランダムに並べる */
+    private fun buildOrder() {
+        order = if (shuffle) listOf(index) + (items.indices - index).shuffled() else items.indices.toList()
+        orderPos = order.indexOf(index).coerceAtLeast(0)
+    }
+
+    private fun playAt(pos: Int) {
+        if (pos !in order.indices) return
         savePosition()
-        index = i
-        playCurrent(resume.get(items[i].key), false)
+        orderPos = pos
+        index = order[pos]
+        playCurrent(resume.get(items[index].key), false)
+    }
+
+    private fun hasNext() = orderPos < order.lastIndex || (repeat == Repeat.ALL && items.size > 1)
+
+    private fun playNext() {
+        when {
+            orderPos < order.lastIndex -> playAt(orderPos + 1)
+            repeat == Repeat.ALL -> {
+                // 最後まで来たら最初から（シャッフル中は並べ直す）
+                if (shuffle) order = items.indices.shuffled()
+                playAt(0)
+            }
+        }
+    }
+
+    private fun playPrevious() {
+        when {
+            player.time > 3000 || (orderPos == 0 && repeat != Repeat.ALL) -> player.setTime(0)
+            orderPos > 0 -> playAt(orderPos - 1)
+            else -> playAt(order.lastIndex)
+        }
+    }
+
+    private fun updateNavButtons() {
+        nextButton.alpha = if (hasNext()) 1f else 0.4f
+    }
+
+    private fun toggleShuffle() {
+        shuffle = !shuffle
+        buildOrder()
+        updateNavButtons()
+        showInfo(if (shuffle) "シャッフル：オン" else "シャッフル：オフ")
+    }
+
+    private fun cycleRepeat() {
+        repeat = Repeat.entries[(repeat.ordinal + 1) % Repeat.entries.size]
+        getSharedPreferences("player", MODE_PRIVATE).edit().putString("repeat", repeat.name).apply()
+        updateRepeatButton()
+        updateNavButtons()
+        showInfo(
+            when (repeat) {
+                Repeat.OFF -> "リピート：オフ"
+                Repeat.ALL -> "リピート：すべて"
+                Repeat.ONE -> "リピート：1本"
+            }
+        )
+    }
+
+    private fun updateRepeatButton() {
+        repeatButton.setImageResource(if (repeat == Repeat.ONE) R.drawable.ic_repeat_one else R.drawable.ic_repeat)
+        repeatButton.alpha = if (repeat == Repeat.OFF) 0.5f else 1f
+        repeatButton.setColorFilter(
+            if (repeat == Repeat.OFF) Color.WHITE else ContextCompat.getColor(this, R.color.accent)
+        )
+    }
+
+    /** 右上の「︙」メニュー */
+    private fun showMoreMenu() {
+        val item = items.getOrNull(index) ?: return
+        val labels = arrayOf(
+            if (shuffle) "シャッフルをオフにする" else "シャッフルをオンにする",
+            "プレイリストに追加",
+        )
+        MaterialAlertDialogBuilder(this)
+            .setItems(labels) { _, which ->
+                when (which) {
+                    0 -> toggleShuffle()
+                    1 -> PlaylistDialogs.addToPlaylist(this, listOf(item))
+                }
+            }
+            .show()
     }
 
     private fun closeFd() {
@@ -385,19 +486,20 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun setLength(ms: Long) {
-        if (ms <= 0) return
+        if (ms <= 0 || ms == lengthMs) return
         lengthMs = ms
         seekBar.max = ms.toInt()
         timeDuration.text = formatTime(ms)
+        // 履歴に長さを記録しておく（一覧で視聴位置のバーを出すため）
+        items.getOrNull(index)?.let { history.updateDuration(it.key, ms) }
     }
 
     private fun onEnded() {
         items.getOrNull(index)?.let { resume.clear(it.key) }
-        if (index < items.lastIndex) {
-            index++
-            playCurrent(resume.get(items[index].key), false)
-        } else {
-            finish()
+        when {
+            repeat == Repeat.ONE -> playCurrent(0, false)
+            hasNext() -> playNext()
+            else -> finish()
         }
     }
 
@@ -613,8 +715,10 @@ class PlayerActivity : AppCompatActivity() {
             setOnClickListener { enterPip() }
         }
         playButton.onTap { togglePlay() }
-        prevButton.onTap { if (player.time > 3000) player.setTime(0) else playIndex(index - 1) }
-        nextButton.onTap { playIndex(index + 1) }
+        prevButton.onTap { playPrevious() }
+        nextButton.onTap { playNext() }
+        repeatButton.onTap { cycleRepeat() }
+        findViewById<View>(R.id.moreButton).onTap { showMoreMenu() }
         findViewById<View>(R.id.lockButton).setOnClickListener { setLocked(true) }
         unlockButton.setOnClickListener { setLocked(false) }
         findViewById<View>(R.id.subtitleButton).onTap { showSubtitleMenu() }
@@ -868,5 +972,9 @@ class PlayerActivity : AppCompatActivity() {
         } catch (_: Exception) {
             0.5f
         }
+    }
+
+    companion object {
+        const val EXTRA_INDEX = "index"
     }
 }

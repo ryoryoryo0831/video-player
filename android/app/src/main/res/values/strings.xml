@@ -23,4 +23,19 @@
     <string name="play_pause">再生 / 一時停止</string>
     <string name="speed">再生速度</string>
     <string name="aspect">画面サイズ</string>
+    <string name="repeat">リピート</string>
+    <string name="more">その他</string>
+
+    <string name="tab_videos">動画</string>
+    <string name="tab_folders">フォルダ</string>
+    <string name="tab_history">履歴</string>
+    <string name="tab_playlists">プレイリスト</string>
+    <string name="clear_history">履歴をすべて削除</string>
+    <string name="new_playlist">新しいプレイリスト</string>
+    <string name="play_all">すべて再生</string>
+    <string name="shuffle_play">シャッフル再生</string>
+    <string name="rename">名前を変更</string>
+    <string name="delete_playlist">プレイリストを削除</string>
+    <string name="reorder">並べ替え</string>
+    <string name="playlist_empty">このプレイリストは空です。\n\n「動画」「フォルダ」「履歴」の画面で動画を長押しして、「プレイリストに追加」を選んでください。</string>
 </resources>

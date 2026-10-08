@@ -1,7 +1,9 @@
 package com.ryose.videoplayer
 
 import android.Manifest
+import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -9,6 +11,8 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import androidx.core.content.ContextCompat
+import org.json.JSONObject
+import java.io.File
 
 data class Video(
     val uri: Uri,
@@ -18,20 +22,59 @@ data class Video(
     val size: Long,
     val folder: String,
     val dateAdded: Long,
-)
+) {
+    fun toItem() = PlaylistItem(uri, title, path, durationMs)
+}
 
 /**
  * 再生する1件分。path があればファイルとして直接開き（字幕の自動読み込みもできる）、
  * 無ければ uri（他アプリから渡されたもの等）をファイルディスクリプタ経由で開く。
  */
-data class PlaylistItem(val uri: Uri, val title: String, val path: String? = null) {
-    /** 続きから再生の記録に使うキー */
-    val key: String get() = uri.toString()
+data class PlaylistItem(
+    val uri: Uri,
+    val title: String,
+    val path: String? = null,
+    val durationMs: Long = 0,
+) {
+    /** 続きから再生・履歴・プレイリストで同じ動画を見分けるためのキー */
+    val key: String get() = path ?: uri.toString()
+
+    fun toJson(): JSONObject = JSONObject()
+        .put("uri", uri.toString())
+        .put("title", title)
+        .put("path", path ?: JSONObject.NULL)
+        .put("duration", durationMs)
+
+    companion object {
+        fun fromJson(o: JSONObject) = PlaylistItem(
+            uri = Uri.parse(o.getString("uri")),
+            title = o.optString("title", "動画"),
+            path = if (o.isNull("path")) null else o.getString("path"),
+            durationMs = o.optLong("duration"),
+        )
+
+        fun fromFile(file: File, durationMs: Long = 0) =
+            PlaylistItem(Uri.fromFile(file), file.name, file.path, durationMs)
+    }
 }
 
 /** 一覧画面から再生画面へ渡すプレイリスト（件数が多いと Intent に乗らないためメモリで受け渡す） */
 object Playlist {
     var items: List<PlaylistItem> = emptyList()
+    var shuffle = false
+}
+
+/** 動画を再生画面で開く */
+fun Activity.playItems(items: List<PlaylistItem>, index: Int, shuffle: Boolean = false) {
+    if (index !in items.indices) return
+    Playlist.items = items
+    Playlist.shuffle = shuffle
+    startActivity(
+        Intent(this, PlayerActivity::class.java)
+            .setData(items[index].uri)
+            .putExtra(PlayerActivity.EXTRA_INDEX, index)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    )
 }
 
 /** 再生位置の記憶（続きから再生） */
@@ -49,6 +92,15 @@ class ResumeStore(context: Context) {
 
     fun clear(key: String) {
         prefs.edit().remove(key).apply()
+    }
+
+    /** 旧バージョンのキー（content:// の Uri）で保存された位置を、新しいキー（ファイルパス）へ移す */
+    fun migrate(from: String, to: String) {
+        if (from == to || !prefs.contains(from)) return
+        val pos = prefs.getLong(from, 0L)
+        val editor = prefs.edit().remove(from)
+        if (!prefs.contains(to)) editor.putLong(to, pos)
+        editor.apply()
     }
 }
 
@@ -82,7 +134,7 @@ fun Context.resolvePath(uri: Uri): String? {
     return try {
         contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)?.use { c ->
             if (c.moveToFirst()) c.getString(0) else null
-        }?.takeIf { java.io.File(it).canRead() }
+        }?.takeIf { File(it).canRead() }
     } catch (_: Exception) {
         null
     }

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/tab_videos"
+        android:icon="@drawable/ic_movie"
+        android:title="@string/tab_videos" />
+    <item
+        android:id="@+id/tab_folders"
+        android:icon="@drawable/ic_folder"
+        android:title="@string/tab_folders" />
+    <item
+        android:id="@+id/tab_history"
+        android:icon="@drawable/ic_history"
+        android:title="@string/tab_history" />
+    <item
+        android:id="@+id/tab_playlists"
+        android:icon="@drawable/ic_playlist"
+        android:title="@string/tab_playlists" />
+</menu>

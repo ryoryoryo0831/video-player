@@ -18,7 +18,7 @@
     </style>
 
     <style name="PlayerButton">
-        <item name="android:layout_width">44dp</item>
+        <item name="android:layout_width">40dp</item>
         <item name="android:layout_height">44dp</item>
         <item name="android:background">?attr/selectableItemBackgroundBorderless</item>
         <item name="android:scaleType">center</item>
