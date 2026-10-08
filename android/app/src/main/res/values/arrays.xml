@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- インターレース解除（VLC の --deinterlace） -->
+    <!-- インターレース解除（VLC の deinterlace オプション） -->
     <string-array name="deinterlace_labels">
         <item>自動</item>
         <item>オフ</item>
