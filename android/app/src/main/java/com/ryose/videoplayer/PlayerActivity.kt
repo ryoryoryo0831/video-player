@@ -71,6 +71,7 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var speedButton: TextView
     private lateinit var repeatButton: ImageButton
     private lateinit var unlockButton: ImageButton
+    private lateinit var abIndicator: TextView
     private lateinit var gestureInfo: TextView
     private lateinit var audioManager: AudioManager
 
@@ -126,12 +127,26 @@ class PlayerActivity : AppCompatActivity() {
 
     private val connection = PlaybackConnection(this, autoCreate = true, onConnected = ::onServiceReady, onDisconnected = { svc = null })
 
-    /** 画面を離れたときの動作（その他メニューで切り替え。初期設定は小窓で再生） */
+    /** 画面を離れたときの動作（設定画面・その他メニューで切り替え。初期設定は小窓で再生） */
     private var leaveAction: LeaveAction
-        get() = getSharedPreferences("player", MODE_PRIVATE).getString("leave_action", null)
-            ?.let { runCatching { LeaveAction.valueOf(it) }.getOrNull() }
-            ?: if (hasPip) LeaveAction.PIP else LeaveAction.PAUSE
-        set(v) = getSharedPreferences("player", MODE_PRIVATE).edit().putString("leave_action", v.name).apply()
+        get() = runCatching { LeaveAction.valueOf(AppSettings.leaveAction(this)) }.getOrNull()
+            ?.takeIf { it != LeaveAction.PIP || hasPip } ?: if (hasPip) LeaveAction.PIP else LeaveAction.PAUSE
+        set(v) = AppSettings.setLeaveAction(this, v.name)
+
+    // 設定（画面を開くたびに読み直す）
+    private var gestureBrightness = true
+    private var gestureVolume = true
+    private var gestureSeek = true
+    private var gestureDoubleTap = true
+    private var doubleTapMs = 10_000L
+
+    private fun readSettings() {
+        gestureBrightness = AppSettings.gestureBrightness(this)
+        gestureVolume = AppSettings.gestureVolume(this)
+        gestureSeek = AppSettings.gestureSeek(this)
+        gestureDoubleTap = AppSettings.gestureDoubleTap(this)
+        doubleTapMs = AppSettings.doubleTapMs(this)
+    }
 
     // ---------- ライフサイクル ----------
 
@@ -161,6 +176,11 @@ class PlayerActivity : AppCompatActivity() {
         speedButton = findViewById(R.id.speedButton)
         repeatButton = findViewById(R.id.repeatButton)
         unlockButton = findViewById(R.id.unlockButton)
+        abIndicator = findViewById(R.id.abIndicator)
+        abIndicator.setOnClickListener {
+            svc?.clearAb()
+            showInfo("A-Bリピートを解除しました")
+        }
         gestureInfo = findViewById(R.id.gestureInfo)
         audioManager = getSystemService(AudioManager::class.java)
 
@@ -199,7 +219,8 @@ class PlayerActivity : AppCompatActivity() {
         svc = s
         s.addListener(listener)
         // ネットワーク再生でログインや証明書の確認を求められたときにダイアログを出す
-        org.videolan.libvlc.Dialog.setCallbacks(s.libVLC, dialogHandler)
+        s.setDialogCallbacks(dialogHandler)
+        if (pendingLoad != null) s.ensureEngineUpToDate()
         s.player.attachViews(videoLayout, null, true, false)
         s.videoUiAttached = true
         when {
@@ -225,13 +246,14 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        svc?.let { org.videolan.libvlc.Dialog.setCallbacks(it.libVLC, dialogHandler) }
+        readSettings()
+        svc?.let { it.setDialogCallbacks(dialogHandler) }
     }
 
     override fun onPause() {
         super.onPause()
         // 別の画面が前に出たら、そちらがダイアログを担当する
-        svc?.let { org.videolan.libvlc.Dialog.setCallbacks(it.libVLC, null) }
+        svc?.let { it.setDialogCallbacks(null) }
     }
 
     override fun onStop() {
@@ -326,6 +348,9 @@ class PlayerActivity : AppCompatActivity() {
         repeatButton.setColorFilter(
             if (s.repeat == PlaybackService.Repeat.OFF) Color.WHITE else ContextCompat.getColor(this, R.color.accent)
         )
+        val ab = s.abLabel()
+        abIndicator.text = ab
+        abIndicator.visibility = if (ab != null) View.VISIBLE else View.GONE
     }
 
     private fun setLength(ms: Long) {
@@ -346,7 +371,7 @@ class PlayerActivity : AppCompatActivity() {
         if (w <= 0 || h <= 0) return
         videoW = w
         videoH = h
-        if (!orientationLocked) {
+        if (!orientationLocked && AppSettings.autoRotate(this)) {
             requestedOrientation =
                 if (w >= h) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                 else ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
@@ -520,7 +545,11 @@ class PlayerActivity : AppCompatActivity() {
             (PlayerDialogs.sleepLabel(s)?.let { "スリープタイマー（$it）" } ?: "スリープタイマー") to {
                 PlayerDialogs.showSleepTimer(this, s)
             },
+            (s.abLabel()?.let { "A-Bリピート（$it）：次へ進む" } ?: "A-Bリピート（区間をくり返す）") to { showInfo(s.abStep()) },
+            *(if (s.chapters().isNotEmpty()) arrayOf<Pair<String, () -> Unit>>("チャプター" to { showChapters() }) else emptyArray()),
+            "スクリーンショット" to { takeScreenshot() },
             "画面を離れたとき：${leaveAction.label}" to { showLeaveActionMenu() },
+            "設定" to { startActivity(Intent(this, SettingsActivity::class.java)) },
         )
         MaterialAlertDialogBuilder(this)
             .setItems(actions.map { it.first }.toTypedArray()) { _, which -> actions[which].second() }
@@ -538,6 +567,101 @@ class PlayerActivity : AppCompatActivity() {
                 showInfo("画面を離れたとき：${options[which].label}")
             }
             .show()
+    }
+
+    /** チャプターの一覧（タップでそこへ移動） */
+    private fun showChapters() {
+        val s = svc ?: return
+        val chapters = s.chapters()
+        if (chapters.isEmpty()) return
+        val current = s.player.chapter
+        val labels = chapters.mapIndexed { i, c ->
+            (if (i == current) "▶  " else "      ") + "${formatTime(c.timeOffset)}  " +
+                (c.name?.takeIf { it.isNotBlank() } ?: "チャプター ${i + 1}")
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle("チャプター（${chapters.size}）")
+            .setItems(labels.toTypedArray()) { _, which -> s.player.setChapter(which) }
+            .show()
+    }
+
+    /** いま表示している映像をそのまま画像として保存する */
+    private fun takeScreenshot() {
+        val surface = findSurface(videoLayout)
+        if (surface == null || surface.width == 0 || surface.height == 0) {
+            showInfo("スクリーンショットを撮れませんでした")
+            return
+        }
+        val bitmap = android.graphics.Bitmap.createBitmap(surface.width, surface.height, android.graphics.Bitmap.Config.ARGB_8888)
+        android.view.PixelCopy.request(surface, bitmap, { result ->
+            if (result != android.view.PixelCopy.SUCCESS) {
+                showInfo("スクリーンショットを撮れませんでした")
+                return@request
+            }
+            val name = (svc?.currentItem?.title?.substringBeforeLast('.') ?: "screenshot") +
+                "_" + formatTime(svc?.player?.time ?: 0).replace(':', '-')
+            lifecycleScope.launch {
+                val saved = withContext(Dispatchers.IO) { Screenshots.save(this@PlayerActivity, bitmap, name) }
+                showInfo(if (saved != null) "📷  保存しました\n$saved" else "保存できませんでした")
+            }
+        }, handler)
+    }
+
+    /** VLC の映像を表示している SurfaceView を探す（字幕用の面より先にある） */
+    private fun findSurface(view: View): android.view.SurfaceView? {
+        if (view is android.view.SurfaceView) return view
+        if (view is android.view.ViewGroup) {
+            for (i in 0 until view.childCount) findSurface(view.getChildAt(i))?.let { return it }
+        }
+        return null
+    }
+
+    // ---------- 音量（100% を超えるブースト） ----------
+
+    /** 端末の音量と VLC の音量を合わせた値（0〜200%） */
+    private fun currentVolumePercent(): Int {
+        val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        val sys = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) * 100 / max
+        val boost = svc?.volume ?: 100
+        return if (sys >= 100 && boost > 100) boost else sys
+    }
+
+    private fun applyVolumePercent(percent: Int) {
+        val s = svc ?: return
+        val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        if (percent <= 100) {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, (percent * max + 50) / 100, 0)
+            s.setBoostVolume(100)
+        } else {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, max, 0)
+            s.setBoostVolume(percent)
+        }
+    }
+
+    private fun volumeText(percent: Int) = "🔊  音量 $percent%" + if (percent > 100) "（ブースト）" else ""
+
+    /** 音量ボタン：端末の音量が最大のときは、さらにブーストできる */
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+        val s = svc
+        if (s != null && AppSettings.audioBoost(this)) {
+            val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            val atMax = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) >= max
+            when {
+                keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP && atMax -> {
+                    val p = (maxOf(s.volume, 100) + 10).coerceAtMost(200)
+                    s.setBoostVolume(p)
+                    showInfo(volumeText(p))
+                    return true
+                }
+                keyCode == android.view.KeyEvent.KEYCODE_VOLUME_DOWN && s.volume > 100 -> {
+                    val p = (s.volume - 10).coerceAtLeast(100)
+                    s.setBoostVolume(p)
+                    showInfo(volumeText(p))
+                    return true
+                }
+            }
+        }
+        return super.onKeyDown(keyCode, event)
     }
 
     // ---------- コントロールの表示 ----------
@@ -733,10 +857,12 @@ class PlayerActivity : AppCompatActivity() {
 
             override fun onDoubleTap(e: MotionEvent): Boolean {
                 val s = svc ?: return true
+                if (!gestureDoubleTap) return false
                 val w = touchLayer.width
+                val sec = doubleTapMs / 1000
                 when {
-                    e.x < w / 3f -> { s.seekBy(-10_000); showInfo("⏪  10秒") }
-                    e.x > w * 2 / 3f -> { s.seekBy(10_000); showInfo("10秒  ⏩") }
+                    e.x < w / 3f -> { s.seekBy(-doubleTapMs); showInfo("⏪  ${sec}秒") }
+                    e.x > w * 2 / 3f -> { s.seekBy(doubleTapMs); showInfo("${sec}秒  ⏩") }
                     else -> s.togglePlay()
                 }
                 return true
@@ -753,12 +879,15 @@ class PlayerActivity : AppCompatActivity() {
                     gesture = when {
                         // 画面端はシステムのジェスチャーに譲る
                         e1.y < edge || e1.y > h - edge -> Gesture.IGNORE
-                        abs(dy) > abs(dx) -> if (e1.x < w / 2f) Gesture.BRIGHTNESS else Gesture.VOLUME
-                        else -> Gesture.SEEK
+                        abs(dy) > abs(dx) -> when {
+                            e1.x < w / 2f -> if (gestureBrightness) Gesture.BRIGHTNESS else Gesture.IGNORE
+                            else -> if (gestureVolume) Gesture.VOLUME else Gesture.IGNORE
+                        }
+                        else -> if (gestureSeek) Gesture.SEEK else Gesture.IGNORE
                     }
                     gestureStartValue = when (gesture) {
                         Gesture.BRIGHTNESS -> currentBrightness()
-                        Gesture.VOLUME -> audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat()
+                        Gesture.VOLUME -> currentVolumePercent().toFloat()
                         else -> 0f
                     }
                     seekStartPos = s.player.time.coerceAtLeast(0)
@@ -771,10 +900,11 @@ class PlayerActivity : AppCompatActivity() {
                         showInfo("☀  明るさ ${(v * 100).roundToInt()}%", autoHide = false)
                     }
                     Gesture.VOLUME -> {
-                        val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-                        val v = (gestureStartValue - dy / h * max).roundToInt().coerceIn(0, max)
-                        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, v, 0)
-                        showInfo("🔊  音量 ${v * 100 / max}%", autoHide = false)
+                        // 画面の高さ 1.5 倍分で 0〜100%。ブーストがオンなら 200% まで
+                        val limit = if (AppSettings.audioBoost(this@PlayerActivity)) 200 else 100
+                        val v = (gestureStartValue - dy / h * 150).roundToInt().coerceIn(0, limit)
+                        applyVolumePercent(v)
+                        showInfo(volumeText(v), autoHide = false)
                     }
                     Gesture.SEEK -> if (lengthMs > 0) {
                         val delta = (dx / w * 90_000).toLong()

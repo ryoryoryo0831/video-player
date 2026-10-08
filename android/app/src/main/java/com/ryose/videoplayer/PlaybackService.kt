@@ -37,6 +37,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.videolan.libvlc.Dialog
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
@@ -144,19 +145,7 @@ class PlaybackService : Service() {
         audioManager = getSystemService(AudioManager::class.java)
         repeat = runCatching { Repeat.valueOf(prefs().getString("repeat", null) ?: "OFF") }.getOrDefault(Repeat.OFF)
 
-        libVLC = LibVLC(
-            this,
-            arrayListOf(
-                "--audio-time-stretch",     // 速度を変えても声の高さを変えない
-                "--no-sub-autodetect-file", // 字幕の自動読み込みはアプリ側で行う（文字コード変換のため）
-                "--http-reconnect",
-            )
-        )
-        player = MediaPlayer(libVLC)
-        player.setEventListener(object : MediaPlayer.EventListener {
-            override fun onEvent(event: MediaPlayer.Event) = onPlayerEvent(event)
-        })
-        applyEqualizer()
+        createEngine()
 
         session = MediaSessionCompat(this, "VideoPlayer").apply {
             setCallback(object : MediaSessionCompat.Callback() {
@@ -207,6 +196,49 @@ class PlaybackService : Service() {
         super.onDestroy()
     }
 
+    // ---------- VLC のエンジン ----------
+
+    /** エンジンを作ったときのオプション（字幕の見た目などの設定が変わったら作り直す） */
+    private var engineOptions: List<String> = emptyList()
+    private var dialogCallbacks: Dialog.Callbacks? = null
+
+    private fun createEngine() {
+        val options = AppSettings.vlcOptions(this)
+        libVLC = try {
+            LibVLC(this, ArrayList(options))
+        } catch (_: Exception) {
+            // 万一オプションが受け付けられなかった場合は、基本のオプションだけで作る
+            LibVLC(this, ArrayList(AppSettings.BASE_VLC_OPTIONS))
+        }
+        engineOptions = options
+        player = MediaPlayer(libVLC)
+        player.setEventListener(object : MediaPlayer.EventListener {
+            override fun onEvent(event: MediaPlayer.Event) = onPlayerEvent(event)
+        })
+        applyEqualizer()
+        dialogCallbacks?.let { Dialog.setCallbacks(libVLC, it) }
+    }
+
+    /**
+     * 設定（字幕の見た目など）が変わっていたら、エンジンを作り直す。
+     * 新しく再生を始める直前、動画の画面につなぐ前に呼ぶ。
+     */
+    fun ensureEngineUpToDate() {
+        if (videoUiAttached || AppSettings.vlcOptions(this) == engineOptions) return
+        savePosition()
+        player.setEventListener(null)
+        player.stop()
+        player.release()
+        libVLC.release()
+        createEngine()
+    }
+
+    /** VLC からの質問（ログイン・証明書の確認など）を表示する画面を登録する */
+    fun setDialogCallbacks(callbacks: Dialog.Callbacks?) {
+        dialogCallbacks = callbacks
+        Dialog.setCallbacks(libVLC, callbacks)
+    }
+
     fun addListener(l: Listener) {
         if (l !in listeners) listeners += l
     }
@@ -231,9 +263,10 @@ class PlaybackService : Service() {
         index = startIndex
         shuffle = shuffled
         buildOrder()
+        ensureEngineUpToDate()
         // 画面から切り離されても動き続けるように「開始済み」のサービスにしておく
         startService(Intent(this, PlaybackService::class.java))
-        playCurrent(resume.get(newItems[startIndex].key), false)
+        playCurrent(startPositionOf(newItems[startIndex]), false)
         dispatch { it.onModesChanged() }
     }
 
@@ -243,6 +276,8 @@ class PlaybackService : Service() {
         lengthMs = 0
         meta = null
         videoTrackDisabled = false
+        abA = -1
+        abB = -1
 
         val media = try {
             val path = item.path
@@ -262,7 +297,7 @@ class PlaybackService : Service() {
             Toast.makeText(this, "ファイルを開けませんでした：${item.title}", Toast.LENGTH_LONG).show()
             return
         }
-        media.setHWDecoderEnabled(true, false)
+        media.setHWDecoderEnabled(AppSettings.hwDecoding(this), false)
         if (startMs > 0) media.addOption(":start-time=${startMs / 1000.0}")
         if (paused) media.addOption(":start-paused")
         if (!item.isAudio && !videoUiAttached) {
@@ -361,7 +396,7 @@ class PlaybackService : Service() {
         parkedAt = null
         orderPos = pos
         index = order[pos]
-        playCurrent(resume.get(items[index].key), false)
+        playCurrent(startPositionOf(items[index]), false)
     }
 
     fun hasNext() = orderPos < order.lastIndex || (repeat == Repeat.ALL && items.size > 1)
@@ -444,6 +479,63 @@ class PlaybackService : Service() {
         }
     }
 
+    // ---------- A-B リピート ----------
+
+    var abA = -1L
+        private set
+    var abB = -1L
+        private set
+
+    /** 1回目で A、2回目で B を今の位置に設定し、3回目で解除する。結果を文章で返す */
+    fun abStep(): String {
+        val t = player.time.coerceAtLeast(0)
+        val msg = when {
+            abA < 0 -> {
+                abA = t
+                "A-Bリピート：A を ${formatTime(t)} に設定（もう一度で B）"
+            }
+            abB < 0 && t > abA + 500 -> {
+                abB = t
+                player.setTime(abA)
+                "A-Bリピート：${formatTime(abA)} 〜 ${formatTime(t)} をくり返します"
+            }
+            abB < 0 -> "B は A（${formatTime(abA)}）より後の位置で設定してください"
+            else -> {
+                clearAb()
+                return "A-Bリピートを解除しました"
+            }
+        }
+        dispatch { it.onModesChanged() }
+        return msg
+    }
+
+    fun clearAb() {
+        abA = -1
+        abB = -1
+        dispatch { it.onModesChanged() }
+    }
+
+    fun abLabel(): String? = when {
+        abA >= 0 && abB > abA -> "A-B"
+        abA >= 0 -> "A-"
+        else -> null
+    }
+
+    // ---------- 音量（100% を超えるブースト） ----------
+
+    /** VLC 側の音量（100 が標準、最大 200） */
+    var volume = 100
+        private set
+
+    fun setBoostVolume(v: Int) {
+        volume = v.coerceIn(0, if (AppSettings.audioBoost(this)) 200 else 100)
+        player.setVolume(volume)
+    }
+
+    // ---------- チャプター ----------
+
+    fun chapters(): Array<MediaPlayer.Chapter> = runCatching { player.getChapters(-1) }.getOrNull() ?: emptyArray()
+
     // ---------- スリープタイマー ----------
 
     private val sleepTask = Runnable {
@@ -499,6 +591,7 @@ class PlaybackService : Service() {
         when (e.type) {
             MediaPlayer.Event.Playing -> {
                 if (player.rate != rate) player.rate = rate
+                if (player.volume != volume) player.setVolume(volume)
                 requestFocus()
                 handler.removeCallbacks(saveTask)
                 handler.post(saveTask)
@@ -515,7 +608,11 @@ class PlaybackService : Service() {
                 updateSession()
             }
             MediaPlayer.Event.LengthChanged -> setLength(e.lengthChanged)
-            MediaPlayer.Event.TimeChanged -> if (lengthMs <= 0) setLength(player.length)
+            MediaPlayer.Event.TimeChanged -> {
+                if (lengthMs <= 0) setLength(player.length)
+                // A-B リピート：B を過ぎたら A に戻る
+                if (abA >= 0 && abB > abA && e.timeChanged >= abB) player.setTime(abA)
+            }
             MediaPlayer.Event.EndReached -> {
                 // 画面側にも伝えてから次へ進む
                 dispatch { it.onPlayerEvent(e) }
@@ -535,6 +632,10 @@ class PlaybackService : Service() {
         currentItem?.let { history.updateDuration(it.key, ms) }
         updateSession()
     }
+
+    /** 続きから再生する位置（設定でオフなら最初から） */
+    private fun startPositionOf(item: PlaylistItem): Long =
+        if (AppSettings.resume(this)) resume.get(item.key) else 0L
 
     fun savePosition() {
         if (parkedAt != null) return

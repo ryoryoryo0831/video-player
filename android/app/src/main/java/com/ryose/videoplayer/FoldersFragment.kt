@@ -4,14 +4,19 @@ import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.os.Parcelable
+import android.text.TextUtils
+import android.view.Gravity
 import android.view.View
+import android.widget.HorizontalScrollView
+import android.widget.LinearLayout
+import android.widget.TextView
+import androidx.core.content.ContextCompat
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.videolan.libvlc.Dialog
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.interfaces.IMedia
 import org.videolan.libvlc.util.MediaBrowser
@@ -75,7 +80,7 @@ class FoldersFragment : BaseListFragment() {
         connection = PlaybackConnection(requireContext(), autoCreate = true, onConnected = { s ->
             svc = s
             if (isResumed) {
-                Dialog.setCallbacks(s.libVLC, dialogHandler)
+                s.setDialogCallbacks(dialogHandler)
                 load()
             }
         }, onDisconnected = { svc = null })
@@ -99,7 +104,7 @@ class FoldersFragment : BaseListFragment() {
 
     override fun onResume() {
         super.onResume()
-        svc?.let { Dialog.setCallbacks(it.libVLC, dialogHandler) }
+        svc?.let { it.setDialogCallbacks(dialogHandler) }
         load()
     }
 
@@ -108,7 +113,7 @@ class FoldersFragment : BaseListFragment() {
         // 他のタブを見ているときは「戻る」でフォルダを上がらない
         backCallback.isEnabled = false
         stopBrowser()
-        svc?.let { Dialog.setCallbacks(it.libVLC, null) }
+        svc?.let { it.setDialogCallbacks(null) }
     }
 
     override fun onDestroyView() {
@@ -116,14 +121,62 @@ class FoldersFragment : BaseListFragment() {
         list.removeCallbacks(renderNetTask)
     }
 
-    override fun subtitle(): String = when (val loc = current) {
-        null -> "ストレージとネットワーク"
-        is Loc.Local -> {
-            // 「/storage/emulated/0/Movies」→「内部共有ストレージ/Movies」のように表示
-            val root = roots.find { loc.dir.path.startsWith(it.dir.path) }
-            if (root != null) root.name + loc.dir.path.removePrefix(root.dir.path) else loc.dir.path
+    // 中に入っているときは、上のバーに場所を表示する
+    override fun subtitle(): String? = if (stack.isEmpty()) "ストレージとネットワーク" else null
+
+    /** 場所の表示名（ストレージの一番上なら「内部共有ストレージ」など） */
+    private fun labelOf(loc: Loc): String = when (loc) {
+        is Loc.Local -> roots.find { it.dir.path == loc.dir.path }?.name ?: loc.dir.name
+        is Loc.Net -> loc.title
+    }
+
+    /** 「トップ › 内部共有ストレージ › Movies」のような場所の表示。タップでその階層へ戻る */
+    private fun renderPath() {
+        val view = view ?: return
+        val scroll = view.findViewById<HorizontalScrollView>(R.id.pathScroll)
+        val bar = view.findViewById<LinearLayout>(R.id.pathBar)
+        bar.removeAllViews()
+        if (stack.isEmpty()) {
+            scroll.visibility = View.GONE
+            return
         }
-        is Loc.Net -> stack.filterIsInstance<Loc.Net>().joinToString("/") { it.title }
+        scroll.visibility = View.VISIBLE
+        val ctx = requireContext()
+        val pad = (8 * resources.displayMetrics.density).toInt()
+        fun segment(text: String, level: Int, isLast: Boolean) {
+            if (level > 0) {
+                bar.addView(TextView(ctx).apply {
+                    this.text = "›"
+                    setTextColor(ContextCompat.getColor(ctx, R.color.text_muted))
+                    textSize = 16f
+                })
+            }
+            bar.addView(TextView(ctx).apply {
+                this.text = text
+                textSize = 14f
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+                maxWidth = (240 * resources.displayMetrics.density).toInt()
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(pad, 0, pad, 0)
+                setTextColor(if (isLast) android.graphics.Color.WHITE else ContextCompat.getColor(ctx, R.color.accent))
+                if (!isLast) {
+                    setBackgroundResource(android.R.drawable.list_selector_background)
+                    setOnClickListener { popTo(level) }
+                }
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.MATCH_PARENT))
+        }
+        segment("トップ", 0, false)
+        stack.forEachIndexed { i, loc -> segment(labelOf(loc), i + 1, i == stack.lastIndex) }
+        // 一番奥（今いる場所）が見えるように右端までスクロール
+        scroll.post { scroll.fullScroll(View.FOCUS_RIGHT) }
+    }
+
+    /** 場所の表示をタップしたとき：その階層まで戻る */
+    private fun popTo(level: Int) {
+        if (level >= stack.size) return
+        while (stack.size > level) stack.removeAt(stack.lastIndex)
+        load(restoreScroll = scrollStates[current?.key ?: ROOT_KEY])
     }
 
     // ---------- 読み込み ----------
@@ -131,6 +184,7 @@ class FoldersFragment : BaseListFragment() {
     private fun load(restoreScroll: Parcelable? = null) {
         backCallback.isEnabled = isResumed && stack.isNotEmpty()
         stopBrowser()
+        renderPath()
         when (val loc = current) {
             null -> loadTop(restoreScroll)
             is Loc.Local -> loadLocal(loc.dir, restoreScroll)
@@ -145,6 +199,7 @@ class FoldersFragment : BaseListFragment() {
             roots = withContext(Dispatchers.IO) { MediaFiles.roots(ctx) }
             if (current != null) return@launch
             renderTop()
+            renderPath()
             restoreScroll?.let { list.layoutManager?.onRestoreInstanceState(it) }
         }
         startDiscovery()
@@ -185,6 +240,7 @@ class FoldersFragment : BaseListFragment() {
                     listing.media.map { Row.Media(it, "") }
             }
             if ((current as? Loc.Local)?.dir != dir) return@launch
+            renderPath()
             showRows(rows, "このフォルダには動画や音楽がありません。", R.drawable.ic_folder)
             restoreScroll?.let { list.layoutManager?.onRestoreInstanceState(it) }
         }

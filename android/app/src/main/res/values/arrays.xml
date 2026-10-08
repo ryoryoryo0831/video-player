@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 字幕の大きさ（VLC の freetype-rel-fontsize。数字が小さいほど文字が大きい） -->
+    <string-array name="sub_size_labels">
+        <item>小</item>
+        <item>標準</item>
+        <item>大</item>
+        <item>特大</item>
+    </string-array>
+    <string-array name="sub_size_values">
+        <item>20</item>
+        <item>16</item>
+        <item>12</item>
+        <item>9</item>
+    </string-array>
+
+    <!-- 字幕の色（RGB を10進数で） -->
+    <string-array name="sub_color_labels">
+        <item>白</item>
+        <item>黄</item>
+        <item>水色</item>
+        <item>緑</item>
+    </string-array>
+    <string-array name="sub_color_values">
+        <item>16777215</item>
+        <item>16776960</item>
+        <item>65535</item>
+        <item>65280</item>
+    </string-array>
+
+    <string-array name="sub_outline_labels">
+        <item>なし</item>
+        <item>細い</item>
+        <item>普通</item>
+        <item>太い</item>
+    </string-array>
+    <string-array name="sub_outline_values">
+        <item>0</item>
+        <item>2</item>
+        <item>4</item>
+        <item>6</item>
+    </string-array>
+
+    <string-array name="leave_action_labels">
+        <item>小窓で再生（ピクチャーインピクチャー）</item>
+        <item>音声だけ再生</item>
+        <item>一時停止</item>
+    </string-array>
+    <string-array name="leave_action_values">
+        <item>PIP</item>
+        <item>AUDIO</item>
+        <item>PAUSE</item>
+    </string-array>
+
+    <string-array name="double_tap_labels">
+        <item>5秒</item>
+        <item>10秒</item>
+        <item>15秒</item>
+        <item>30秒</item>
+    </string-array>
+    <string-array name="double_tap_values">
+        <item>5</item>
+        <item>10</item>
+        <item>15</item>
+        <item>30</item>
+    </string-array>
+</resources>

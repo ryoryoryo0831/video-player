@@ -49,6 +49,15 @@ class MediaAdapter(
             notifyDataSetChanged()
         }
 
+    /** グリッド表示（動画の行を大きなサムネイルのマスで表示する） */
+    var grid = false
+        @SuppressLint("NotifyDataSetChanged")
+        set(value) {
+            if (field == value) return
+            field = value
+            notifyDataSetChanged()
+        }
+
     /** 設定するとつまみを表示し、触ったときに呼ばれる（プレイリストの並べ替え用） */
     var dragListener: ((RecyclerView.ViewHolder) -> Unit)? = null
 
@@ -79,7 +88,7 @@ class MediaAdapter(
 
     override fun getItemViewType(position: Int) = when (data[position]) {
         is Row.Folder -> 0
-        is Row.Media -> 1
+        is Row.Media -> if (grid) 3 else 1
         is Row.Header -> 2
     }
 
@@ -90,6 +99,7 @@ class MediaAdapter(
         return when (viewType) {
             0 -> FolderHolder(inflater.inflate(R.layout.item_folder, parent, false))
             2 -> HeaderHolder(inflater.inflate(R.layout.item_header, parent, false))
+            3 -> MediaHolder(inflater.inflate(R.layout.item_video_grid, parent, false))
             else -> MediaHolder(inflater.inflate(R.layout.item_video, parent, false))
         }
     }

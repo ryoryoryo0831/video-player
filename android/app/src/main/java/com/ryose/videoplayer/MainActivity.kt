@@ -200,6 +200,10 @@ class MainActivity : AppCompatActivity() {
             openDocuments.launch(arrayOf("video/*", "audio/*"))
             return true
         }
+        if (item.itemId == R.id.action_settings) {
+            startActivity(Intent(this, SettingsActivity::class.java))
+            return true
+        }
         if (item.itemId == R.id.action_open_url) {
             NetworkDialogs.openUrl(this)
             return true

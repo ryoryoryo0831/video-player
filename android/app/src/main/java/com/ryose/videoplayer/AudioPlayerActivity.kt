@@ -10,6 +10,7 @@ import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.SeekBar
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
@@ -155,13 +156,13 @@ class AudioPlayerActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        svc?.let { org.videolan.libvlc.Dialog.setCallbacks(it.libVLC, dialogHandler) }
+        svc?.let { it.setDialogCallbacks(dialogHandler) }
     }
 
     override fun onPause() {
         super.onPause()
         // 別の画面が前に出たら、そちらがダイアログを担当する
-        svc?.let { org.videolan.libvlc.Dialog.setCallbacks(it.libVLC, null) }
+        svc?.let { it.setDialogCallbacks(null) }
     }
 
     override fun onStop() {
@@ -175,7 +176,7 @@ class AudioPlayerActivity : AppCompatActivity() {
         svc = s
         s.addListener(listener)
         // ネットワーク再生でログインや証明書の確認を求められたときにダイアログを出す
-        org.videolan.libvlc.Dialog.setCallbacks(s.libVLC, dialogHandler)
+        s.setDialogCallbacks(dialogHandler)
         pendingLoad?.let { (items, index, shuffle) ->
             pendingLoad = null
             s.load(items, index, shuffle)
@@ -254,20 +255,32 @@ class AudioPlayerActivity : AppCompatActivity() {
     private fun showMoreMenu() {
         val s = svc ?: return
         val item = s.currentItem ?: return
-        val labels = listOfNotNull(
-            "プレイリストに追加",
-            PlayerDialogs.sleepLabel(s)?.let { "スリープタイマー（$it）" } ?: "スリープタイマー",
-            "再生を終了",
+        val chapters = s.chapters()
+        val actions = mutableListOf<Pair<String, () -> Unit>>(
+            "プレイリストに追加" to { PlaylistDialogs.addToPlaylist(this, listOf(item)) },
+            (PlayerDialogs.sleepLabel(s)?.let { "スリープタイマー（$it）" } ?: "スリープタイマー") to {
+                PlayerDialogs.showSleepTimer(this, s)
+            },
+            (s.abLabel()?.let { "A-Bリピート（$it）：次へ進む" } ?: "A-Bリピート（区間をくり返す）") to {
+                Toast.makeText(this, s.abStep(), Toast.LENGTH_SHORT).show()
+            },
         )
+        if (chapters.isNotEmpty()) {
+            actions += "チャプター（${chapters.size}）" to {
+                val labels = chapters.mapIndexed { i, c ->
+                    "${formatTime(c.timeOffset)}  " + (c.name?.takeIf { it.isNotBlank() } ?: "チャプター ${i + 1}")
+                }
+                MaterialAlertDialogBuilder(this)
+                    .setTitle("チャプター")
+                    .setItems(labels.toTypedArray()) { _, which -> s.player.setChapter(which) }
+                    .show()
+            }
+        }
+        actions += "設定" to { startActivity(android.content.Intent(this, SettingsActivity::class.java)) }
+        actions += "再生を終了" to { s.stopPlayback() }
         MaterialAlertDialogBuilder(this)
             .setTitle(s.displayTitle())
-            .setItems(labels.toTypedArray()) { _, which ->
-                when (which) {
-                    0 -> PlaylistDialogs.addToPlaylist(this, listOf(item))
-                    1 -> PlayerDialogs.showSleepTimer(this, s)
-                    2 -> s.stopPlayback()
-                }
-            }
+            .setItems(actions.map { it.first }.toTypedArray()) { _, which -> actions[which].second() }
             .show()
     }
 }

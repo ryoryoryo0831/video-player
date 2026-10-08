@@ -29,6 +29,12 @@
         </menu>
     </item>
     <item
+        android:id="@+id/action_grid"
+        android:checkable="true"
+        android:orderInCategory="205"
+        android:title="グリッドで表示"
+        app:showAsAction="never" />
+    <item
         android:id="@+id/action_refresh"
         android:orderInCategory="210"
         android:title="@string/refresh"

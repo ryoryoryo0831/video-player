@@ -45,6 +45,20 @@
             android:textColor="#FFFFFF"
             android:textSize="16sp" />
 
+        <!-- A-Bリピート中の表示（タップで解除） -->
+        <TextView
+            android:id="@+id/abIndicator"
+            android:layout_width="wrap_content"
+            android:layout_height="28dp"
+            android:layout_marginHorizontal="4dp"
+            android:background="@drawable/bg_ab_badge"
+            android:gravity="center"
+            android:paddingHorizontal="8dp"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
+
         <ImageButton
             android:id="@+id/aspectButton"
             style="@style/PlayerButton"

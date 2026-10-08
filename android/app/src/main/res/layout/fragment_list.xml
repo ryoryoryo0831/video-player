@@ -5,6 +5,24 @@
     android:layout_height="match_parent"
     android:orientation="vertical">
 
+    <!-- フォルダタブの「今いる場所」（横にスクロールでき、タップでその階層へ戻れる） -->
+    <HorizontalScrollView
+        android:id="@+id/pathScroll"
+        android:layout_width="match_parent"
+        android:layout_height="44dp"
+        android:background="#141720"
+        android:scrollbars="none"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:id="@+id/pathBar"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="8dp" />
+    </HorizontalScrollView>
+
     <!-- 音楽タブの「曲・アルバム・アーティスト」切り替え（他のタブでは非表示） -->
     <com.google.android.material.chip.ChipGroup
         android:id="@+id/chips"
