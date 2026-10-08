@@ -8,8 +8,8 @@ import kotlin.math.roundToInt
  */
 object PopupGeometry {
 
-    /** 小窓の長い方の辺の最小（dp）。OS の小窓より小さくできる */
-    const val MIN_SIZE_DP = 112
+    /** 小窓の長い方の辺の最小（dp）。OS の小窓（多くの端末で 108dp ほど）より小さくできる */
+    const val MIN_SIZE_DP = 96
     /** 初めて出すときの大きさ（dp） */
     const val DEFAULT_SIZE_DP = 220
     /** 画面の端に寄せたときに、最低でも見えている幅（dp） */
@@ -46,10 +46,14 @@ object PopupGeometry {
         return x.coerceIn(kx - w, screenW - kx) to y.coerceIn(ky - h, screenH - ky)
     }
 
-    /** 小窓の幅に合わせて出すボタンの数（5：戻る・前へ・再生・次へ・進む／3：戻る・再生・進む／1：再生だけ） */
+    /**
+     * 小窓の幅に合わせて出す、真ん中のボタンの数
+     * （5：戻る・前へ・再生・次へ・進む／3：戻る・再生・進む／1：再生だけ／0：なし。ダブルタップで再生・一時停止）
+     */
     fun buttonCount(widthDp: Float): Int = when {
         widthDp >= 216 -> 5
         widthDp >= 148 -> 3
-        else -> 1
+        widthDp >= 128 -> 1
+        else -> 0
     }
 }

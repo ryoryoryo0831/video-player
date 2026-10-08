@@ -26,8 +26,8 @@
         <ImageButton
             android:id="@+id/popupClose"
             style="@style/PopupButton"
-            android:layout_width="30dp"
-            android:layout_height="30dp"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
             android:layout_gravity="top|start"
             android:contentDescription="@string/close"
             android:padding="5dp"
@@ -36,8 +36,8 @@
         <ImageButton
             android:id="@+id/popupExpand"
             style="@style/PopupButton"
-            android:layout_width="30dp"
-            android:layout_height="30dp"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
             android:layout_gravity="top|end"
             android:contentDescription="@string/expand"
             android:padding="5dp"
@@ -87,11 +87,11 @@
         <!-- 右下のつまみ：ドラッグで大きさを変える -->
         <ImageView
             android:id="@+id/popupResize"
-            android:layout_width="30dp"
-            android:layout_height="30dp"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
             android:layout_gravity="bottom|end"
             android:contentDescription="@string/resize"
-            android:padding="7dp"
+            android:padding="4dp"
             android:src="@drawable/ic_resize" />
 
         <ProgressBar

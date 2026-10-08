@@ -324,6 +324,7 @@ class PlayerActivity : AppCompatActivity() {
             else -> s.restoreVideo()
         }
         refreshAll()
+        askOverlayPermissionOnce()
     }
 
     private fun startPendingLoad(s: PlaybackService) {
@@ -345,6 +346,8 @@ class PlayerActivity : AppCompatActivity() {
         readSettings()
         // 設定画面で向きの設定が変わっていたら反映する
         applyOrientation()
+        // 許可を出して戻ってきたときなど：OS の小窓に自動で入るかどうかを今の状態に合わせる
+        updatePipParams()
         svc?.let { it.setDialogCallbacks(dialogHandler) }
     }
 
@@ -1247,6 +1250,16 @@ class PlayerActivity : AppCompatActivity() {
             return
         }
         finish()
+    }
+
+    /**
+     * 自由な小窓の設定なのにまだ許可が無いときは、最初の 1 回だけ先にお願いしておく
+     * （ホームボタンで離れるときには確認の画面を出せないので）
+     */
+    private fun askOverlayPermissionOnce() {
+        if (isTv || leaveAction != LeaveAction.POPUP || canPopup || AppSettings.popupPermissionAsked(this)) return
+        AppSettings.setPopupPermissionAsked(this)
+        askOverlayPermission()
     }
 
     /** 「他のアプリの上に重ねて表示」の許可をお願いする */

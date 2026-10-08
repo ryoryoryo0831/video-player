@@ -47,6 +47,8 @@ class PopupGeometryTest {
     fun ボタンの数は幅で変わる() {
         assertEquals(5, PopupGeometry.buttonCount(240f))
         assertEquals(3, PopupGeometry.buttonCount(180f))
-        assertEquals(1, PopupGeometry.buttonCount(112f))
+        assertEquals(1, PopupGeometry.buttonCount(132f))
+        // 一番小さいときは真ん中のボタンを出さない（ダブルタップで再生・一時停止）
+        assertEquals(0, PopupGeometry.buttonCount(96f))
     }
 }

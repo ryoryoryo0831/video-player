@@ -81,6 +81,10 @@ object AppSettings {
     fun setPopupPlacement(c: Context, sizeDp: Int, x: Int, y: Int) =
         prefs(c).edit().putInt("popup_size", sizeDp).putInt("popup_x", x).putInt("popup_y", y).apply()
 
+    /** 自由な小窓の許可を、再生画面で一度お願いした */
+    fun popupPermissionAsked(c: Context) = bool(c, "popup_permission_asked", false)
+    fun setPopupPermissionAsked(c: Context) = prefs(c).edit().putBoolean("popup_permission_asked", true).apply()
+
     // 一覧
     fun videosGrid(c: Context) = bool(c, "videos_grid", false)
     fun setVideosGrid(c: Context, v: Boolean) = prefs(c).edit().putBoolean("videos_grid", v).apply()

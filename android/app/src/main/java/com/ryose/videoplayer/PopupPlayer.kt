@@ -216,6 +216,7 @@ class PopupPlayer(private val service: PlaybackService) : PlaybackService.Listen
     private fun updateButtons() {
         if (root == null) return
         val count = PopupGeometry.buttonCount(params.width / density)
+        playButton.visibility = if (count >= 1) View.VISIBLE else View.GONE
         rewindButton.visibility = if (count >= 3) View.VISIBLE else View.GONE
         forwardButton.visibility = if (count >= 3) View.VISIBLE else View.GONE
         prevButton.visibility = if (count >= 5) View.VISIBLE else View.GONE
