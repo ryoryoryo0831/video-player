@@ -194,6 +194,8 @@ class FoldersFragment : BaseListFragment() {
 
     // ---------- 読み込み ----------
 
+    override fun onFilesChanged() = load(list.layoutManager?.onSaveInstanceState())
+
     private fun load(restoreScroll: Parcelable? = null) {
         backCallback.isEnabled = isResumed && stack.isNotEmpty()
         stopBrowser()

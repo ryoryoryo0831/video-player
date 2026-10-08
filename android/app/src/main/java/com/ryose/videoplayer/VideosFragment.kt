@@ -131,6 +131,8 @@ class VideosFragment : BaseListFragment() {
         }
     }
 
+    override fun onFilesChanged() = load()
+
     private fun load() {
         val ctx = requireContext()
         loadedWithAccess = ctx.hasMediaAccess(audio = false)

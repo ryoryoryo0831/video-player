@@ -220,6 +220,9 @@ fun Context.hasStorageAccess(): Boolean =
     else ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) ==
         PackageManager.PERMISSION_GRANTED
 
+/** 再生速度の表示（1x・1.25x・0.5x など） */
+fun formatRate(r: Float): String = "%.2f".format(java.util.Locale.US, r).trimEnd('0').trimEnd('.') + "x"
+
 fun formatTime(ms: Long): String {
     val total = (ms.coerceAtLeast(0) / 1000)
     val h = total / 3600

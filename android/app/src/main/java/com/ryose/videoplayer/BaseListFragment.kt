@@ -6,8 +6,11 @@ import android.widget.Button
 import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -99,6 +102,21 @@ abstract class BaseListFragment : Fragment(R.layout.fragment_list) {
         requireActivity().playItems(media.map { it.item }, media.indexOf(target))
     }
 
+    /** ファイルの名前を変えた・消したあとに一覧を読み込み直す（画面ごとに上書き） */
+    protected open fun onFilesChanged() {}
+
+    /** Android の確認画面で削除しようとしているもの */
+    private var pendingDelete: PlaylistItem? = null
+
+    private val systemDelete = registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+        val item = pendingDelete
+        pendingDelete = null
+        if (result.resultCode == android.app.Activity.RESULT_OK && item != null) {
+            FileActions.forget(requireContext(), item)
+            onFilesChanged()
+        }
+    }
+
     /** 長押しメニューに追加する項目（画面ごとに上書き） */
     protected open fun extraActions(row: Row): List<Pair<String, () -> Unit>> = emptyList()
 
@@ -110,6 +128,17 @@ abstract class BaseListFragment : Fragment(R.layout.fragment_list) {
             actions += "プレイリストに追加" to { PlaylistDialogs.addToPlaylist(requireContext(), listOf(row.item)) }
         }
         actions += extraActions(row)
+        if (row is Row.Media && FileActions.isLocal(row.item)) {
+            val ctx = requireContext()
+            val item = row.item
+            actions += "共有" to { FileActions.share(ctx, item) }
+            actions += "詳細" to { viewLifecycleOwner.lifecycleScope.launch { FileActions.showDetails(ctx, item) } }
+            if (FileActions.canRename(ctx, item)) actions += "名前を変更" to { FileActions.rename(ctx, item) { onFilesChanged() } }
+            if (FileActions.canDelete(ctx, item)) actions += "削除" to {
+                pendingDelete = item
+                FileActions.delete(ctx, item, { systemDelete.launch(it) }) { onFilesChanged() }
+            }
+        }
         if (actions.isEmpty()) return
         val title = when (row) {
             is Row.Media -> row.item.title

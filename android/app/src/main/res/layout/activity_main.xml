@@ -36,7 +36,7 @@
         <com.google.android.material.card.MaterialCardView
             android:layout_width="48dp"
             android:layout_height="48dp"
-            app:cardBackgroundColor="#2A2F3A"
+            app:cardBackgroundColor="@color/card_alt"
             app:cardCornerRadius="6dp"
             app:cardElevation="0dp"
             app:strokeWidth="0dp">
@@ -62,7 +62,7 @@
                 android:layout_height="wrap_content"
                 android:ellipsize="end"
                 android:maxLines="1"
-                android:textColor="#E8EAF0"
+                android:textColor="@color/text_primary"
                 android:textSize="14sp" />
 
             <TextView

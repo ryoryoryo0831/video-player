@@ -1,11 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="accent">#4F8CFF</color>
-    <color name="bg">#0F1115</color>
-    <color name="surface">#181B22</color>
-    <color name="text_muted">#8A91A0</color>
-
-    <style name="Theme.VideoPlayer" parent="Theme.Material3.Dark.NoActionBar">
+    <!-- 一覧などの画面。設定で「明るい／暗い／端末に合わせる」を切り替える（色は colors.xml） -->
+    <style name="Theme.VideoPlayer" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">@color/accent</item>
         <item name="colorOnPrimary">#FFFFFF</item>
         <item name="android:colorBackground">@color/bg</item>
@@ -13,13 +9,20 @@
         <item name="colorSurface">@color/surface</item>
     </style>
 
-    <style name="Theme.VideoPlayer.Player">
+    <!-- 動画の再生画面は、テーマの設定にかかわらずいつも暗い -->
+    <style name="Theme.VideoPlayer.Player" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">#4F8CFF</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="android:colorBackground">#0F1115</item>
+        <item name="colorSurface">#181B22</item>
         <item name="android:windowBackground">@android:color/black</item>
+        <!-- アイコンは白（明るさに関係なく見やすく） -->
+        <item name="colorControlNormal">#FFFFFF</item>
     </style>
 
     <style name="PlayerButton">
         <item name="android:layout_width">40dp</item>
-        <item name="android:layout_height">44dp</item>
+        <item name="android:layout_height">48dp</item>
         <item name="android:background">?attr/selectableItemBackgroundBorderless</item>
         <item name="android:scaleType">center</item>
     </style>

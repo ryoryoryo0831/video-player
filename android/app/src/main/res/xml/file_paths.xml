@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 「共有」で他のアプリに渡せる場所（端末内のストレージと SD カード） -->
+<paths>
+    <external-path name="external" path="." />
+    <root-path name="root" path="." />
+</paths>

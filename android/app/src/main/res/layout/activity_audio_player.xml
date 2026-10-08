@@ -53,7 +53,7 @@
             android:layout_width="240dp"
             android:layout_height="240dp"
             android:layout_gravity="center"
-            app:cardBackgroundColor="#222631"
+            app:cardBackgroundColor="@color/card"
             app:cardCornerRadius="16dp"
             app:cardElevation="0dp"
             app:strokeWidth="0dp">
@@ -79,7 +79,7 @@
             android:layout_height="wrap_content"
             android:ellipsize="end"
             android:maxLines="2"
-            android:textColor="#FFFFFF"
+            android:textColor="@color/text_primary"
             android:textSize="22sp"
             android:textStyle="bold" />
 
@@ -165,6 +165,7 @@
             android:layout_marginHorizontal="16dp"
             android:background="@drawable/bg_play_big"
             android:contentDescription="@string/play_pause"
+            app:tint="#FFFFFF"
             android:padding="18dp"
             android:scaleType="fitCenter"
             android:src="@drawable/ic_pause" />
@@ -213,7 +214,7 @@
             android:contentDescription="@string/speed"
             android:gravity="center"
             android:text="1.0x"
-            android:textColor="#FFFFFF"
+            android:textColor="@color/text_primary"
             android:textSize="14sp"
             android:textStyle="bold" />
 

@@ -321,7 +321,8 @@ class PlaybackService : Service() {
             onPlaybackError("ファイルを開けませんでした：${item.title}")
             return
         }
-        media.setHWDecoderEnabled(AppSettings.hwDecoding(this), false)
+        media.setHWDecoderEnabled(hwDecodingFor(item), false)
+        if (item.isNetwork) media.addOption(":network-caching=${AppSettings.networkCachingMs(this)}")
         if (startMs > 0) media.addOption(":start-time=${startMs / 1000.0}")
         if (paused) media.addOption(":start-paused")
         if (!item.isAudio && !videoUiAttached && renderer == null) {
@@ -593,6 +594,24 @@ class PlaybackService : Service() {
             playCurrent(position, false)
         }
         dispatch { it.onModesChanged() }
+    }
+
+    // ---------- デコード（動画ごとの切り替え） ----------
+
+    /** 動画ごとに「ハードウェア／ソフトウェア」を切り替えたもの（アプリを閉じるまで覚えておく） */
+    private val hwOverrides = mutableMapOf<String, Boolean>()
+
+    fun hwDecodingFor(item: PlaylistItem): Boolean = hwOverrides[item.key] ?: AppSettings.hwDecoding(this)
+
+    /** 今の動画のデコード方法を切り替えて、同じ位置から開き直す */
+    fun toggleHwDecoding(): Boolean {
+        val item = currentItem ?: return false
+        val hw = !hwDecodingFor(item)
+        hwOverrides[item.key] = hw
+        val t = player.time.coerceAtLeast(0)
+        val wasPlaying = player.isPlaying
+        playCurrent(t, paused = !wasPlaying)
+        return hw
     }
 
     // ---------- A-B リピート ----------
@@ -1022,7 +1041,7 @@ class PlaybackService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_music_note)
+            .setSmallIcon(R.drawable.ic_stat_music_note)
             .setContentTitle(displayTitle())
             .setContentText(displaySubtitle())
             .setLargeIcon(meta?.art)
@@ -1032,14 +1051,14 @@ class PlaybackService : Service() {
             .setOngoing(playing)
             .setSilent(true)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .addAction(R.drawable.ic_skip_previous, "前へ", serviceIntent(ACTION_PREVIOUS, 1))
+            .addAction(R.drawable.ic_stat_skip_previous, "前へ", serviceIntent(ACTION_PREVIOUS, 1))
             .addAction(
-                if (playing) R.drawable.ic_pause else R.drawable.ic_play,
+                if (playing) R.drawable.ic_stat_pause else R.drawable.ic_stat_play,
                 if (playing) "一時停止" else "再生",
                 serviceIntent(ACTION_PLAY_PAUSE, 2),
             )
-            .addAction(R.drawable.ic_skip_next, "次へ", serviceIntent(ACTION_NEXT, 3))
-            .addAction(R.drawable.ic_close, "終了", serviceIntent(ACTION_STOP, 4))
+            .addAction(R.drawable.ic_stat_skip_next, "次へ", serviceIntent(ACTION_NEXT, 3))
+            .addAction(R.drawable.ic_stat_close, "終了", serviceIntent(ACTION_STOP, 4))
             .setStyle(
                 androidx.media.app.NotificationCompat.MediaStyle()
                     .setMediaSession(session.sessionToken)

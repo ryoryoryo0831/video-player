@@ -116,6 +116,8 @@ class MusicFragment : BaseListFragment() {
 
     override fun subtitle(): String? = opened?.title ?: if (songs.isEmpty()) null else "${songs.size} 曲"
 
+    override fun onFilesChanged() = load()
+
     private fun load() {
         val ctx = requireContext()
         loadedWithAccess = ctx.hasMediaAccess(audio = true)

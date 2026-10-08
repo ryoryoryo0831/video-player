@@ -70,8 +70,8 @@ class AudioPlayerActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+            statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT),
         )
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_audio_player)
@@ -238,7 +238,10 @@ class AudioPlayerActivity : AppCompatActivity() {
     }
 
     private fun tint(button: ImageButton, on: Boolean) {
-        button.setColorFilter(if (on) ContextCompat.getColor(this, R.color.accent) else Color.WHITE)
+        val normal = com.google.android.material.color.MaterialColors.getColor(
+            button, com.google.android.material.R.attr.colorOnSurface,
+        )
+        button.setColorFilter(if (on) ContextCompat.getColor(this, R.color.accent) else normal)
         button.alpha = if (on) 1f else 0.6f
     }
 
@@ -249,7 +252,7 @@ class AudioPlayerActivity : AppCompatActivity() {
         tint(repeatButton, s.repeat != PlaybackService.Repeat.OFF)
         tint(timerButton, s.sleepAt > 0 || s.sleepAtEnd)
         nextButton.alpha = if (s.hasNext()) 1f else 0.4f
-        speedButton.text = "${s.rate}x"
+        speedButton.text = formatRate(s.rate)
     }
 
     private fun showMoreMenu() {

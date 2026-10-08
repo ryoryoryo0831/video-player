@@ -1,12 +1,12 @@
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item>
         <shape android:shape="rectangle">
-            <solid android:color="#222631" />
+            <solid android:color="@color/card" />
         </shape>
     </item>
     <item android:height="1dp" android:gravity="top">
         <shape android:shape="rectangle">
-            <solid android:color="#2A2F3A" />
+            <solid android:color="@color/card_alt" />
         </shape>
     </item>
 </layer-list>

@@ -78,8 +78,24 @@
             app:defaultValue="true"
             app:iconSpaceReserved="false"
             app:key="hw_decoding"
-            app:summary="オフにすると、映像が乱れる・緑色になるなどの問題が直ることがあります（電池の消費は増えます）"
+            app:summary="オフにすると、映像が乱れる・緑色になるなどの問題が直ることがあります（電池の消費は増えます）。動画ごとに切り替えるには再生画面の「︙」から"
             app:title="ハードウェアデコード" />
+        <ListPreference
+            app:defaultValue="-1"
+            app:entries="@array/deinterlace_labels"
+            app:entryValues="@array/deinterlace_values"
+            app:iconSpaceReserved="false"
+            app:key="deinterlace"
+            app:title="インターレース解除（テレビ録画などの横縞を消す）"
+            app:useSimpleSummaryProvider="true" />
+        <ListPreference
+            app:defaultValue="1500"
+            app:entries="@array/network_caching_labels"
+            app:entryValues="@array/network_caching_values"
+            app:iconSpaceReserved="false"
+            app:key="network_caching"
+            app:title="ネットワーク再生の先読み"
+            app:useSimpleSummaryProvider="true" />
     </PreferenceCategory>
 
     <PreferenceCategory
@@ -114,6 +130,19 @@
             app:iconSpaceReserved="false"
             app:key="double_tap_seconds"
             app:title="スキップする秒数"
+            app:useSimpleSummaryProvider="true" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        app:iconSpaceReserved="false"
+        app:title="表示">
+        <ListPreference
+            app:defaultValue="dark"
+            app:entries="@array/theme_labels"
+            app:entryValues="@array/theme_values"
+            app:iconSpaceReserved="false"
+            app:key="theme"
+            app:title="テーマ（一覧の画面の明るさ）"
             app:useSimpleSummaryProvider="true" />
     </PreferenceCategory>
 

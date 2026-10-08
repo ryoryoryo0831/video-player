@@ -43,6 +43,8 @@ class HistoryFragment : BaseListFragment() {
         load()
     }
 
+    override fun onFilesChanged() = load()
+
     private fun load() {
         viewLifecycleOwner.lifecycleScope.launch {
             val rows = withContext(Dispatchers.IO) {

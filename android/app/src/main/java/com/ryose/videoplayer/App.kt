@@ -34,6 +34,7 @@ data class VideoThumb(val path: String?, val uri: Uri)
 class App : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
+        AppSettings.applyTheme(this)
         // 古いデータの片付け（起動を遅くしないように裏で）
         CoroutineScope(Dispatchers.IO).launch {
             runCatching { ThumbCache.trim(this@App) }

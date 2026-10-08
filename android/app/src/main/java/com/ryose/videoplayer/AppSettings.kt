@@ -23,6 +23,8 @@ object AppSettings {
     /** 字幕の見た目などを含めた、VLC のエンジンに渡すオプション */
     fun vlcOptions(c: Context): List<String> = buildList {
         addAll(BASE_VLC_OPTIONS)
+        add("--deinterlace=${string(c, "deinterlace", "-1")}")
+        add("--deinterlace-mode=blend")
         add("--freetype-rel-fontsize=${string(c, "sub_size", "16")}")
         add("--freetype-color=${string(c, "sub_color", "16777215")}")
         add("--freetype-outline-thickness=${string(c, "sub_outline", "4")}")
@@ -40,6 +42,18 @@ object AppSettings {
     fun hwDecoding(c: Context) = bool(c, "hw_decoding", true)
     fun audioBoost(c: Context) = bool(c, "audio_boost", true)
     fun autoRotate(c: Context) = bool(c, "auto_rotate", true)
+    fun networkCachingMs(c: Context) = string(c, "network_caching", "1500").toIntOrNull() ?: 1500
+
+    /** テーマ（"dark"・"light"・"system"）を反映する */
+    fun applyTheme(c: Context, value: String = string(c, "theme", "dark")) {
+        androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(
+            when (value) {
+                "light" -> androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO
+                "system" -> androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
+                else -> androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES
+            }
+        )
+    }
 
     /** 動画の画面を離れたとき："PIP"・"AUDIO"・"PAUSE" */
     fun leaveAction(c: Context): String {

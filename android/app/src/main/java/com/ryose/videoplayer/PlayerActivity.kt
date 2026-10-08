@@ -1,8 +1,15 @@
 package com.ryose.videoplayer
 
 import android.annotation.SuppressLint
+import android.app.PendingIntent
 import android.app.PictureInPictureParams
+import android.app.RemoteAction
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.graphics.drawable.Icon
+import android.view.ScaleGestureDetector
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -75,6 +82,7 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var castButton: ImageButton
     private lateinit var castInfo: TextView
     private lateinit var gestureInfo: TextView
+    private lateinit var restartButton: TextView
     private lateinit var audioManager: AudioManager
 
     private val handler = Handler(Looper.getMainLooper())
@@ -116,6 +124,15 @@ class PlayerActivity : AppCompatActivity() {
     private val hideInfo = Runnable { gestureInfo.visibility = View.GONE }
     private val hideControlsTask = Runnable { hideControls() }
     private val hideUnlockTask = Runnable { unlockButton.visibility = View.GONE }
+    private val hideRestartTask = Runnable { restartButton.visibility = View.GONE }
+    private val isTv by lazy { packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK) }
+
+    /** ピンチで拡大した倍率（1 で元どおり） */
+    private var zoom = 1f
+    private var pinching = false
+
+    /** シークバーを動かしている間、映像も追いかけて動かす（間引いて移動） */
+    private var lastPreviewSeek = 0L
 
     private val pickSubtitle =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { addSubtitleFromUri(it) } }
@@ -189,10 +206,21 @@ class PlayerActivity : AppCompatActivity() {
             showInfo("A-Bリピートを解除しました")
         }
         gestureInfo = findViewById(R.id.gestureInfo)
+        restartButton = findViewById(R.id.restartButton)
+        restartButton.setOnClickListener {
+            svc?.seekTo(0)
+            restartButton.visibility = View.GONE
+            showInfo("最初から再生")
+        }
         audioManager = getSystemService(AudioManager::class.java)
 
         onBackPressedDispatcher.addCallback(this) {
-            if (locked) showUnlockBriefly() else finish()
+            when {
+                locked -> showUnlockBriefly()
+                // テレビのリモコンでは、まず操作パネルを隠す
+                isTv && controlsVisible -> hideControls()
+                else -> finish()
+            }
         }
 
         setupControls()
@@ -256,7 +284,13 @@ class PlayerActivity : AppCompatActivity() {
         pendingLoad = null
         s.load(items, index, shuffle)
         val start = if (AppSettings.resume(this)) ResumeStore(this).get(items[index].key) else 0L
-        if (start > 0) showInfo("続きから再生  ${formatTime(start)}")
+        if (start > 0) {
+            showInfo("続きから再生  ${formatTime(start)}")
+            // 最初から見たいときのために、少しの間だけボタンを出す
+            restartButton.visibility = View.VISIBLE
+            handler.removeCallbacks(hideRestartTask)
+            handler.postDelayed(hideRestartTask, 8000)
+        }
     }
 
     override fun onResume() {
@@ -303,6 +337,7 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        if (pipReceiverRegistered) runCatching { unregisterReceiver(pipReceiver) }
         disconnect()
         handler.removeCallbacksAndMessages(null)
     }
@@ -375,7 +410,7 @@ class PlayerActivity : AppCompatActivity() {
     private fun updateModes() {
         val s = svc ?: return
         nextButton.alpha = if (s.hasNext()) 1f else 0.4f
-        speedButton.text = "${s.rate}x"
+        speedButton.text = formatRate(s.rate)
         repeatButton.setImageResource(if (s.repeat == PlaybackService.Repeat.ONE) R.drawable.ic_repeat_one else R.drawable.ic_repeat)
         repeatButton.alpha = if (s.repeat == PlaybackService.Repeat.OFF) 0.5f else 1f
         repeatButton.setColorFilter(
@@ -526,7 +561,7 @@ class PlayerActivity : AppCompatActivity() {
             text = if (subtitle) "＋：字幕を遅らせる　−：字幕を早める" else "＋：音声を遅らせる　−：音声を早める"
             textSize = 13f
             gravity = Gravity.CENTER
-            setTextColor(ContextCompat.getColor(this@PlayerActivity, R.color.text_muted))
+            setTextColor(Color.LTGRAY)
             setPadding(0, (8 * dp).toInt(), 0, 0)
         }
         val box = LinearLayout(this).apply {
@@ -549,6 +584,7 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun cycleScale() {
         val s = svc ?: return
+        setZoom(1f)
         scaleIndex = (scaleIndex + 1) % scales.size
         s.player.setVideoScale(scales[scaleIndex].first)
         showInfo(scales[scaleIndex].second)
@@ -591,6 +627,12 @@ class PlayerActivity : AppCompatActivity() {
             },
             (s.abLabel()?.let { "A-Bリピート（$it）：次へ進む" } ?: "A-Bリピート（区間をくり返す）") to { showInfo(s.abStep()) },
             *(if (s.chapters().isNotEmpty()) arrayOf<Pair<String, () -> Unit>>("チャプター" to { showChapters() }) else emptyArray()),
+            "時間を指定して移動" to { showJumpDialog() },
+            *(if ((s.player.videoTracksCount) > 1) arrayOf<Pair<String, () -> Unit>>("映像トラック" to { showVideoTrackMenu() }) else emptyArray()),
+            "デコード：${if (s.hwDecodingFor(item)) "ハードウェア" else "ソフトウェア"}（切り替える）" to {
+                val hw = s.toggleHwDecoding()
+                showInfo(if (hw) "ハードウェアデコードに切り替えました" else "ソフトウェアデコードに切り替えました")
+            },
             "スクリーンショット" to { takeScreenshot() },
             "画面を離れたとき：${leaveAction.label}" to { showLeaveActionMenu() },
             "設定" to { startActivity(Intent(this, SettingsActivity::class.java)) },
@@ -610,6 +652,56 @@ class PlayerActivity : AppCompatActivity() {
                 updatePipParams()
                 showInfo("画面を離れたとき：${options[which].label}")
             }
+            .show()
+    }
+
+    /** 「1:23:45」「83:10」「90」（秒）などで入力した時間へ移動する */
+    private fun showJumpDialog() {
+        val s = svc ?: return
+        val dp = resources.displayMetrics.density
+        val input = android.widget.EditText(this).apply {
+            hint = "例：1:23:45 / 12:30"
+            inputType = android.text.InputType.TYPE_CLASS_DATETIME or android.text.InputType.TYPE_DATETIME_VARIATION_TIME
+            setText(formatTime(s.player.time))
+            selectAll()
+        }
+        val box = android.widget.FrameLayout(this).apply {
+            setPadding((20 * dp).toInt(), (8 * dp).toInt(), (20 * dp).toInt(), 0)
+            addView(input)
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle("時間を指定して移動" + if (lengthMs > 0) "（長さ ${formatTime(lengthMs)}）" else "")
+            .setView(box)
+            .setPositiveButton("移動") { _, _ ->
+                val ms = parseTime(input.text.toString())
+                if (ms == null) showInfo("時間の形式が正しくありません")
+                else {
+                    s.seekTo(ms)
+                    showInfo(formatTime(ms))
+                }
+            }
+            .setNegativeButton("キャンセル", null)
+            .show()
+        input.requestFocus()
+    }
+
+    /** "1:23:45" → ミリ秒。数字だけなら秒 */
+    private fun parseTime(text: String): Long? {
+        val parts = text.trim().replace('：', ':').split(':')
+        if (parts.isEmpty() || parts.size > 3) return null
+        val nums = parts.map { it.trim().toLongOrNull() ?: return null }
+        if (nums.any { it < 0 }) return null
+        val sec = nums.fold(0L) { acc, n -> acc * 60 + n }
+        return sec * 1000
+    }
+
+    private fun showVideoTrackMenu() {
+        val player = svc?.player ?: return
+        val tracks = player.videoTracks ?: return
+        val current = player.videoTrack
+        MaterialAlertDialogBuilder(this)
+            .setTitle("映像トラック")
+            .setItems(tracks.map { trackLabel(it, current) }.toTypedArray()) { _, which -> player.setVideoTrack(tracks[which].id) }
             .show()
     }
 
@@ -773,6 +865,13 @@ class PlayerActivity : AppCompatActivity() {
                 if (!userSeeking) {
                     svc?.seekTo(progress.toLong())
                     scheduleHide()
+                } else {
+                    // 動かしている最中も、映像が追いかけて見えるように時々移動する
+                    val now = android.os.SystemClock.uptimeMillis()
+                    if (now - lastPreviewSeek > 300) {
+                        lastPreviewSeek = now
+                        svc?.seekTo(progress.toLong())
+                    }
                 }
             }
 
@@ -895,8 +994,39 @@ class PlayerActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= 31) {
             builder.setAutoEnterEnabled(svc?.isPlaying == true && leaveAction == LeaveAction.PIP && svc?.renderer == null)
         }
+        builder.setActions(pipActions())
         return builder.build()
     }
+
+    /** 小窓に出すボタン（戻る・再生/一時停止・進む） */
+    private fun pipActions(): List<RemoteAction> {
+        fun action(icon: Int, title: String, code: Int) = RemoteAction(
+            Icon.createWithResource(this, icon), title, title,
+            PendingIntent.getBroadcast(
+                this, code, Intent(ACTION_PIP).setPackage(packageName).putExtra(EXTRA_PIP, code),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            ),
+        )
+        val playing = svc?.isPlaying == true
+        return listOf(
+            action(R.drawable.ic_stat_rewind, "戻る", PIP_REWIND),
+            if (playing) action(R.drawable.ic_stat_pause, "一時停止", PIP_PLAY_PAUSE)
+            else action(R.drawable.ic_stat_play, "再生", PIP_PLAY_PAUSE),
+            action(R.drawable.ic_stat_forward, "進む", PIP_FORWARD),
+        )
+    }
+
+    private val pipReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val s = svc ?: return
+            when (intent.getIntExtra(EXTRA_PIP, -1)) {
+                PIP_REWIND -> s.seekBy(-doubleTapMs)
+                PIP_PLAY_PAUSE -> s.togglePlay()
+                PIP_FORWARD -> s.seekBy(doubleTapMs)
+            }
+        }
+    }
+    private var pipReceiverRegistered = false
 
     private fun updatePipParams() {
         if (hasPip) runCatching { setPictureInPictureParams(pipParams()) }
@@ -915,7 +1045,15 @@ class PlayerActivity : AppCompatActivity() {
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         inPip = isInPictureInPictureMode
+        if (inPip && !pipReceiverRegistered) {
+            ContextCompat.registerReceiver(this, pipReceiver, IntentFilter(ACTION_PIP), ContextCompat.RECEIVER_NOT_EXPORTED)
+            pipReceiverRegistered = true
+        } else if (!inPip && pipReceiverRegistered) {
+            runCatching { unregisterReceiver(pipReceiver) }
+            pipReceiverRegistered = false
+        }
         if (inPip) {
+            setZoom(1f)
             hideControls()
             unlockButton.visibility = View.GONE
             gestureInfo.visibility = View.GONE
@@ -932,9 +1070,35 @@ class PlayerActivity : AppCompatActivity() {
     // 左半分の上下スワイプ: 明るさ / 右半分の上下スワイプ: 音量 / 左右スワイプ: シーク
     // ダブルタップ: 左=10秒戻る、右=10秒進む、中央=再生/一時停止
 
+    /** ピンチで拡大（1〜4 倍）。元に戻すときは指を縮めるか、画面サイズのボタン */
+    private fun setZoom(z: Float) {
+        zoom = z.coerceIn(1f, 4f)
+        videoLayout.scaleX = zoom
+        videoLayout.scaleY = zoom
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     private fun setupGestures() {
         val edge = 48 * resources.displayMetrics.density
+        val scaleDetector = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
+                pinching = true
+                gesture = Gesture.IGNORE
+                return true
+            }
+
+            override fun onScale(detector: ScaleGestureDetector): Boolean {
+                setZoom(zoom * detector.scaleFactor)
+                showInfo(if (zoom <= 1.01f) "ズーム：元のサイズ" else "ズーム  %.1f 倍".format(zoom), autoHide = false)
+                return true
+            }
+
+            override fun onScaleEnd(detector: ScaleGestureDetector) {
+                if (zoom < 1.05f) setZoom(1f)
+                handler.removeCallbacks(hideInfo)
+                handler.postDelayed(hideInfo, 600)
+            }
+        })
         val detector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onDown(e: MotionEvent) = true
 
@@ -1018,8 +1182,11 @@ class PlayerActivity : AppCompatActivity() {
                 if (e.actionMasked == MotionEvent.ACTION_UP) showUnlockBriefly()
                 return@setOnTouchListener true
             }
-            detector.onTouchEvent(e)
+            scaleDetector.onTouchEvent(e)
+            // 2 本指で拡大している間は、ほかのジェスチャーは受け付けない
+            if (!pinching && e.pointerCount == 1) detector.onTouchEvent(e)
             val action = e.actionMasked
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) pinching = false
             if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
                 val was = gesture
                 gesture = Gesture.NONE
@@ -1045,5 +1212,13 @@ class PlayerActivity : AppCompatActivity() {
         } catch (_: Exception) {
             0.5f
         }
+    }
+
+    private companion object {
+        const val ACTION_PIP = "com.ryose.videoplayer.PIP_CONTROL"
+        const val EXTRA_PIP = "control"
+        const val PIP_REWIND = 1
+        const val PIP_PLAY_PAUSE = 2
+        const val PIP_FORWARD = 3
     }
 }

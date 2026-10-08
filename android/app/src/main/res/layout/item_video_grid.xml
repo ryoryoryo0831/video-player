@@ -11,7 +11,7 @@
     <com.google.android.material.card.MaterialCardView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        app:cardBackgroundColor="#222631"
+        app:cardBackgroundColor="@color/card"
         app:cardCornerRadius="8dp"
         app:cardElevation="0dp"
         app:strokeWidth="0dp">
@@ -59,7 +59,7 @@
         android:layout_marginTop="6dp"
         android:ellipsize="end"
         android:maxLines="2"
-        android:textColor="#E8EAF0"
+        android:textColor="@color/text_primary"
         android:textSize="13sp" />
 
     <TextView

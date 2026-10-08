@@ -235,6 +235,24 @@
         android:src="@drawable/ic_lock"
         android:visibility="gone" />
 
+    <!-- 続きから再生したときに少しだけ出す「最初から再生」 -->
+    <TextView
+        android:id="@+id/restartButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_marginEnd="16dp"
+        android:layout_marginBottom="140dp"
+        android:background="@drawable/bg_info"
+        android:focusable="true"
+        android:minHeight="48dp"
+        android:gravity="center"
+        android:paddingHorizontal="16dp"
+        android:text="⏮  最初から再生"
+        android:textColor="#FFFFFF"
+        android:textSize="15sp"
+        android:visibility="gone" />
+
     <TextView
         android:id="@+id/gestureInfo"
         android:layout_width="wrap_content"

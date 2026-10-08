@@ -1,5 +1,45 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- インターレース解除（VLC の --deinterlace） -->
+    <string-array name="deinterlace_labels">
+        <item>自動</item>
+        <item>オフ</item>
+        <item>オン</item>
+    </string-array>
+    <string-array name="deinterlace_values">
+        <item>-1</item>
+        <item>0</item>
+        <item>1</item>
+    </string-array>
+
+    <!-- ネットワーク再生の先読み（ミリ秒） -->
+    <string-array name="network_caching_labels">
+        <item>短い（0.5秒・すぐ始まる）</item>
+        <item>標準（1.5秒）</item>
+        <item>長め（3秒）</item>
+        <item>長い（5秒・途切れにくい）</item>
+        <item>とても長い（10秒）</item>
+    </string-array>
+    <string-array name="network_caching_values">
+        <item>500</item>
+        <item>1500</item>
+        <item>3000</item>
+        <item>5000</item>
+        <item>10000</item>
+    </string-array>
+
+    <!-- テーマ -->
+    <string-array name="theme_labels">
+        <item>暗い</item>
+        <item>明るい</item>
+        <item>端末の設定に合わせる</item>
+    </string-array>
+    <string-array name="theme_values">
+        <item>dark</item>
+        <item>light</item>
+        <item>system</item>
+    </string-array>
+
     <!-- 字幕の大きさ（VLC の freetype-rel-fontsize。数字が小さいほど文字が大きい） -->
     <string-array name="sub_size_labels">
         <item>小</item>

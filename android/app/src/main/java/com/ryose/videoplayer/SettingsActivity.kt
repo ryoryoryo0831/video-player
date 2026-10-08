@@ -16,8 +16,8 @@ class SettingsActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+            statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT),
         )
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_settings)
@@ -49,6 +49,11 @@ class SettingsActivity : AppCompatActivity() {
             val ctx = requireContext()
             findPreference<androidx.preference.Preference>("version")?.summary =
                 ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
+            // テーマはすぐに切り替える
+            findPreference<androidx.preference.ListPreference>("theme")?.setOnPreferenceChangeListener { _, v ->
+                AppSettings.applyTheme(ctx, v as String)
+                true
+            }
         }
     }
 }

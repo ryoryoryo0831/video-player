@@ -1,6 +1,7 @@
 package com.ryose.videoplayer
 
 import android.content.Context
+import com.google.android.material.color.MaterialColors
 import android.graphics.Color
 import android.view.Gravity
 import android.widget.LinearLayout
@@ -45,18 +46,58 @@ object EqualizerPrefs {
 /** 動画・音楽の再生画面で共通のダイアログ */
 object PlayerDialogs {
 
-    private val SPEEDS = floatArrayOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f, 3f, 4f)
 
     private fun mark(on: Boolean) = if (on) "✓  " else "      "
 
+    /** 再生速度：スライダーで 0.25〜4 倍を 0.05 刻み、よく使う速度はボタンで */
     fun showSpeed(context: Context, svc: PlaybackService, onChanged: () -> Unit) {
-        val labels = SPEEDS.map { mark(it == svc.rate) + "${it}x" }
+        val dp = context.resources.displayMetrics.density
+        val value = TextView(context).apply {
+            textSize = 26f
+            gravity = Gravity.CENTER
+        }
+        val slider = com.google.android.material.slider.Slider(context).apply {
+            valueFrom = 0.25f
+            valueTo = 4f
+            stepSize = 0.05f
+            value = (Math.round(svc.rate * 20) / 20f).coerceIn(0.25f, 4f)
+            setLabelFormatter { formatRate(it) }
+        }
+        fun apply(r: Float) {
+            svc.setPlaybackRate(r)
+            value.text = formatRate(r)
+            onChanged()
+        }
+        value.text = formatRate(svc.rate)
+        slider.addOnChangeListener { _, v, fromUser -> if (fromUser) apply(v) }
+        val presets = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+        listOf(0.5f, 1f, 1.25f, 1.5f, 2f).forEach { r ->
+            presets.addView(
+                MaterialButton(context, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+                    text = if (r == 1f) "標準" else formatRate(r)
+                    setPadding(0, 0, 0, 0)
+                    setOnClickListener {
+                        slider.value = r
+                        apply(r)
+                    }
+                },
+                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginStart = (2 * dp).toInt()
+                    marginEnd = (2 * dp).toInt()
+                },
+            )
+        }
+        val box = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding((20 * dp).toInt(), (12 * dp).toInt(), (20 * dp).toInt(), 0)
+            addView(value)
+            addView(slider)
+            addView(presets)
+        }
         MaterialAlertDialogBuilder(context)
             .setTitle("再生速度")
-            .setItems(labels.toTypedArray()) { _, which ->
-                svc.setPlaybackRate(SPEEDS[which])
-                onChanged()
-            }
+            .setView(box)
+            .setPositiveButton("閉じる", null)
             .show()
     }
 
@@ -148,7 +189,9 @@ object PlayerDialogs {
     /** イコライザー（VLC と同じプリセット・10バンド） */
     fun showEqualizer(context: Context, svc: PlaybackService) {
         val dp = context.resources.displayMetrics.density
-        val muted = ContextCompat.getColor(context, R.color.text_muted)
+        // 動画の画面（いつも暗い）と音楽の画面（明るいこともある）の両方で読めるよう、画面のテーマの色を使う
+        val muted = MaterialColors.getColor(context, com.google.android.material.R.attr.colorOnSurfaceVariant, Color.GRAY)
+        val textColor = MaterialColors.getColor(context, com.google.android.material.R.attr.colorOnSurface, Color.WHITE)
         val bandCount = MediaPlayer.Equalizer.getBandCount()
         var s = EqualizerPrefs.load(context)
 
@@ -170,7 +213,7 @@ object PlayerDialogs {
         // スライダーは 0.1dB 単位、-20〜+20dB
         fun toProgress(db: Float) = ((db + 20f) * 10).roundToInt()
         fun toDb(progress: Int) = progress / 10f - 20f
-        fun fmt(db: Float) = "%+.1f dB".format(db)
+        fun fmtDb(db: Float) = "%+.1f dB".format(db)
 
         val sliders = mutableListOf<Pair<SeekBar, TextView>>()
         fun addSlider(label: String, value: Float, onChange: (Float) -> Unit) {
@@ -180,12 +223,12 @@ object PlayerDialogs {
             }
             val name = TextView(context).apply {
                 text = label
-                setTextColor(Color.WHITE)
+                setTextColor(textColor)
                 textSize = 13f
                 minWidth = (64 * dp).toInt()
             }
             val valueText = TextView(context).apply {
-                text = fmt(value)
+                text = fmtDb(value)
                 setTextColor(muted)
                 textSize = 12f
                 minWidth = (64 * dp).toInt()
@@ -196,7 +239,7 @@ object PlayerDialogs {
                 progress = toProgress(value)
                 setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                     override fun onProgressChanged(sb: SeekBar, p: Int, fromUser: Boolean) {
-                        valueText.text = fmt(toDb(p))
+                        valueText.text = fmtDb(toDb(p))
                         if (fromUser) onChange(toDb(p))
                     }
                     override fun onStartTrackingTouch(sb: SeekBar) {}
