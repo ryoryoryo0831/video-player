@@ -62,12 +62,14 @@
             app:key="leave_action"
             app:title="動画の画面を離れたとき"
             app:useSimpleSummaryProvider="true" />
-        <SwitchPreferenceCompat
-            app:defaultValue="true"
+        <ListPreference
+            app:defaultValue="auto"
+            app:entries="@array/player_orientation_labels"
+            app:entryValues="@array/player_orientation_values"
             app:iconSpaceReserved="false"
-            app:key="auto_rotate"
-            app:summary="横長の動画は横向き、縦長の動画は縦向きにします"
-            app:title="動画に合わせて画面を回転" />
+            app:key="player_orientation"
+            app:title="再生画面の向き"
+            app:useSimpleSummaryProvider="true" />
         <SwitchPreferenceCompat
             app:defaultValue="true"
             app:iconSpaceReserved="false"

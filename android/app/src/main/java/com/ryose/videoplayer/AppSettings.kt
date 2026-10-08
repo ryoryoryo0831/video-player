@@ -41,7 +41,8 @@ object AppSettings {
     fun resume(c: Context) = bool(c, "resume", true)
     fun hwDecoding(c: Context) = bool(c, "hw_decoding", true)
     fun audioBoost(c: Context) = bool(c, "audio_boost", true)
-    fun autoRotate(c: Context) = bool(c, "auto_rotate", true)
+    /** 再生画面の向き："auto"（スマホの向きに合わせて自動回転）・"video"（動画に合わせる） */
+    fun playerOrientation(c: Context) = string(c, "player_orientation", "auto")
     fun networkCachingMs(c: Context) = string(c, "network_caching", "1500").toIntOrNull() ?: 1500
 
     /** テーマ（"dark"・"light"・"system"）を反映する */

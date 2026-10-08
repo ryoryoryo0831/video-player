@@ -105,7 +105,8 @@ class PlayerActivity : AppCompatActivity() {
     private var locked = false
     private var userSeeking = false
     private var inPip = false
-    private var orientationLocked = false
+    /** 回転ボタンで固定した向き（null なら設定どおり） */
+    private var manualOrientation: Int? = null
 
     // ジェスチャー
     private var gesture = Gesture.NONE
@@ -184,7 +185,13 @@ class PlayerActivity : AppCompatActivity() {
             }
         }
         WindowCompat.setDecorFitsSystemWindows(window, false)
-        hideSystemUi()
+        @Suppress("DEPRECATION")
+        run {
+            // 操作パネルと一緒に出すシステムのバーは、映像の上に透明で重ねる
+            window.statusBarColor = Color.TRANSPARENT
+            window.navigationBarColor = Color.parseColor("#66000000")
+        }
+        updateSystemBars()
 
         videoLayout = findViewById(R.id.videoLayout)
         touchLayer = findViewById(R.id.touchLayer)
@@ -244,7 +251,7 @@ class PlayerActivity : AppCompatActivity() {
     private fun takeLoadFrom(intent: Intent) {
         if (intent.getBooleanExtra(PlaybackService.EXTRA_FROM_SESSION, false)) return
         pendingLoad = playlistFromIntent(intent)
-        orientationLocked = false
+        manualOrientation = null
     }
 
     override fun onStart() {
@@ -298,6 +305,8 @@ class PlayerActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         readSettings()
+        // 設定画面で向きの設定が変わっていたら反映する
+        applyOrientation()
         svc?.let { it.setDialogCallbacks(dialogHandler) }
     }
 
@@ -346,7 +355,7 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) hideSystemUi()
+        if (hasFocus) updateSystemBars()
     }
 
     // ---------- 表示の更新 ----------
@@ -446,12 +455,7 @@ class PlayerActivity : AppCompatActivity() {
         if (w <= 0 || h <= 0) return
         videoW = w
         videoH = h
-        if (!orientationLocked && AppSettings.autoRotate(this)) {
-            requestedOrientation =
-                // USER_* なら端末の「画面の自動回転」がオフのときはそれに従う
-                if (w >= h) ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE
-                else ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
-        }
+        applyOrientation()
         s.player.setVideoScale(scales[scaleIndex].first)
         updatePipParams()
     }
@@ -584,12 +588,36 @@ class PlayerActivity : AppCompatActivity() {
         showInfo(scales[scaleIndex].second)
     }
 
+    /**
+     * 画面の向きを決める。
+     * 回転ボタンで固定していればその向き、設定が「自動回転」ならスマホの向きに合わせて回り
+     * （端末の自動回転がオフでも再生画面は回る）、「動画に合わせる」なら動画の縦横で決める
+     */
+    private fun applyOrientation() {
+        requestedOrientation = manualOrientation ?: when {
+            AppSettings.playerOrientation(this) == "video" && videoW > 0 && videoH > 0 ->
+                if (videoW >= videoH) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                else ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+            AppSettings.playerOrientation(this) == "video" -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            else -> ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+        }
+    }
+
+    /** 回転ボタン：自動 → 横に固定 → 縦に固定 → 自動 … */
     private fun toggleOrientation() {
-        orientationLocked = true
-        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-        requestedOrientation =
-            if (isLandscape) ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
-            else ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        manualOrientation = when (manualOrientation) {
+            null -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+            else -> null
+        }
+        applyOrientation()
+        showInfo(
+            when (manualOrientation) {
+                ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE -> "横向きに固定"
+                ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT -> "縦向きに固定"
+                else -> if (AppSettings.playerOrientation(this) == "video") "向き：動画に合わせる" else "向き：自動回転"
+            }
+        )
     }
 
     private fun cycleRepeat() {
@@ -890,15 +918,21 @@ class PlayerActivity : AppCompatActivity() {
     private fun setupInsets() {
         val topPad = topBar.paddingTop
         val sidePad = topBar.paddingLeft
+        // システムのバーやカメラの切り欠きと重ならないように、その分だけ内側に寄せる
+        // （バーが隠れているときも同じ位置にしておき、表示を切り替えてもボタンが動かないようにする）
+        fun safe(insets: WindowInsetsCompat) = androidx.core.graphics.Insets.max(
+            insets.getInsetsIgnoringVisibility(WindowInsetsCompat.Type.systemBars()),
+            insets.getInsets(WindowInsetsCompat.Type.displayCutout()),
+        )
         ViewCompat.setOnApplyWindowInsetsListener(topBar) { v, insets ->
-            val cut = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
+            val cut = safe(insets)
             v.updatePadding(left = sidePad + cut.left, top = topPad + cut.top, right = sidePad + cut.right)
             insets
         }
         val bottomPad = bottomBar.paddingBottom
         val bottomSide = bottomBar.paddingLeft
         ViewCompat.setOnApplyWindowInsetsListener(bottomBar) { v, insets ->
-            val cut = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
+            val cut = safe(insets)
             v.updatePadding(left = bottomSide + cut.left, right = bottomSide + cut.right, bottom = bottomPad + cut.bottom)
             insets
         }
@@ -924,6 +958,7 @@ class PlayerActivity : AppCompatActivity() {
         bottomBar.fadeIn()
         centerControls.fadeIn()
         controlsVisible = true
+        updateSystemBars()
         handler.removeCallbacks(hideControlsTask)
         if (autoHide) scheduleHide()
     }
@@ -938,7 +973,7 @@ class PlayerActivity : AppCompatActivity() {
         bottomBar.fadeOut()
         centerControls.fadeOut()
         controlsVisible = false
-        hideSystemUi()
+        updateSystemBars()
     }
 
     private fun scheduleHide() {
@@ -965,10 +1000,12 @@ class PlayerActivity : AppCompatActivity() {
         handler.postDelayed(hideUnlockTask, 2500)
     }
 
-    private fun hideSystemUi() {
+    /** 操作パネルが出ている間はシステムのバー（時計・ナビゲーション）も出し、隠れたら一緒に隠す */
+    private fun updateSystemBars() {
         WindowCompat.getInsetsController(window, window.decorView).apply {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            hide(WindowInsetsCompat.Type.systemBars())
+            if (controlsVisible && !locked && !inPip) show(WindowInsetsCompat.Type.systemBars())
+            else hide(WindowInsetsCompat.Type.systemBars())
         }
     }
 
