@@ -3,12 +3,12 @@ package com.ryose.videoplayer
 import android.Manifest
 import android.content.ContentUris
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import android.provider.Settings
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
@@ -20,7 +20,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SearchView
-import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
@@ -47,10 +46,7 @@ class MainActivity : AppCompatActivity() {
     private var allVideos: List<Video> = emptyList()
     private var query = ""
     private var sort = Sort.DATE
-
-    private val videoPermission =
-        if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_VIDEO
-        else Manifest.permission.READ_EXTERNAL_STORAGE
+    private var hadAccess = false
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { loadVideos() }
@@ -64,7 +60,7 @@ class MainActivity : AppCompatActivity() {
                 } catch (_: SecurityException) {
                 }
             }
-            play(uris.map { PlaylistItem(it, queryDisplayName(it) ?: it.lastPathSegment ?: "動画") }, 0)
+            play(uris.map { PlaylistItem(it, queryDisplayName(it) ?: it.lastPathSegment ?: "動画", resolvePath(it)) }, 0)
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -85,12 +81,12 @@ class MainActivity : AppCompatActivity() {
 
         adapter = VideoAdapter(resume) { position ->
             val shown = adapter.items
-            if (position in shown.indices) play(shown.map { PlaylistItem(it.uri, it.title) }, position)
+            if (position in shown.indices) play(shown.map { PlaylistItem(it.uri, it.title, it.path) }, position)
         }
         listView.layoutManager = LinearLayoutManager(this)
         listView.adapter = adapter
 
-        grantButton.setOnClickListener { permissionLauncher.launch(videoPermission) }
+        grantButton.setOnClickListener { requestStorageAccess() }
         findViewById<Button>(R.id.openButton).setOnClickListener { openDocuments.launch(arrayOf("video/*")) }
 
         // Android 15 以降の全画面表示に合わせて、ステータスバー等の分だけ余白をとる
@@ -101,11 +97,18 @@ class MainActivity : AppCompatActivity() {
             insets
         }
 
-        if (hasPermission()) loadVideos() else permissionLauncher.launch(videoPermission)
+        hadAccess = hasStorageAccess()
+        loadVideos()
     }
 
     override fun onResume() {
         super.onResume()
+        // 設定画面でアクセスを許可して戻ってきたら読み込み直す
+        val access = hasStorageAccess()
+        if (access != hadAccess) {
+            hadAccess = access
+            loadVideos()
+        }
         // 再生画面から戻ったとき、視聴位置のバーを更新
         adapter.notifyDataSetChanged()
     }
@@ -128,7 +131,7 @@ class MainActivity : AppCompatActivity() {
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         when (item.itemId) {
             R.id.action_open -> openDocuments.launch(arrayOf("video/*"))
-            R.id.action_refresh -> if (hasPermission()) loadVideos() else permissionLauncher.launch(videoPermission)
+            R.id.action_refresh -> if (hasStorageAccess()) loadVideos() else requestStorageAccess()
             R.id.sort_date -> setSort(item, Sort.DATE)
             R.id.sort_name -> setSort(item, Sort.NAME)
             R.id.sort_duration -> setSort(item, Sort.DURATION)
@@ -143,8 +146,19 @@ class MainActivity : AppCompatActivity() {
         applyFilter()
     }
 
-    private fun hasPermission() =
-        ContextCompat.checkSelfPermission(this, videoPermission) == PackageManager.PERMISSION_GRANTED
+    private fun requestStorageAccess() {
+        if (Build.VERSION.SDK_INT >= 30) {
+            try {
+                startActivity(
+                    Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName"))
+                )
+            } catch (_: Exception) {
+                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            }
+        } else {
+            permissionLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+    }
 
     private fun play(items: List<PlaylistItem>, index: Int) {
         Playlist.items = items
@@ -156,7 +170,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadVideos() {
-        if (!hasPermission()) {
+        if (!hasStorageAccess()) {
             showEmpty(getString(R.string.need_permission), showGrant = true)
             return
         }
@@ -169,7 +183,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun applyFilter() {
-        if (!hasPermission()) return
+        if (!hasStorageAccess()) return
         val filtered = allVideos
             .filter { query.isBlank() || it.title.contains(query, ignoreCase = true) || it.folder.contains(query, ignoreCase = true) }
             .let { list ->
@@ -195,12 +209,14 @@ class MainActivity : AppCompatActivity() {
         listView.visibility = View.GONE
     }
 
+    @Suppress("DEPRECATION")
     private fun queryVideos(): List<Video> {
         val collection: Uri =
             if (Build.VERSION.SDK_INT >= 29) MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
             else MediaStore.Video.Media.EXTERNAL_CONTENT_URI
         val projection = arrayOf(
             MediaStore.Video.Media._ID,
+            MediaStore.Video.Media.DATA,
             MediaStore.Video.Media.DISPLAY_NAME,
             MediaStore.Video.Media.DURATION,
             MediaStore.Video.Media.SIZE,
@@ -211,6 +227,7 @@ class MainActivity : AppCompatActivity() {
         try {
             contentResolver.query(collection, projection, null, null, null)?.use { c ->
                 val idCol = c.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
+                val dataCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DATA)
                 val nameCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
                 val durCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)
                 val sizeCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE)
@@ -219,6 +236,7 @@ class MainActivity : AppCompatActivity() {
                 while (c.moveToNext()) {
                     result += Video(
                         uri = ContentUris.withAppendedId(collection, c.getLong(idCol)),
+                        path = c.getString(dataCol),
                         title = c.getString(nameCol) ?: "(名前なし)",
                         durationMs = c.getLong(durCol),
                         size = c.getLong(sizeCol),

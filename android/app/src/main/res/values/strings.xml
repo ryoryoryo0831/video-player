@@ -8,10 +8,19 @@
     <string name="sort_name">名前順</string>
     <string name="sort_duration">長い順</string>
     <string name="refresh">再読み込み</string>
-    <string name="need_permission">端末内の動画を一覧表示するには、動画へのアクセスを許可してください。</string>
+    <string name="need_permission">VLC と同じように、端末内の動画と、その隣にある字幕ファイルを読み込むため、「すべてのファイルへのアクセス」を許可してください。\n\n次の画面でこのアプリのスイッチをオンにして、戻ってきてください。</string>
     <string name="grant_permission">アクセスを許可</string>
     <string name="no_videos">動画が見つかりませんでした。</string>
     <string name="back">戻る</string>
     <string name="rotate">画面の向き</string>
     <string name="pip">ピクチャーインピクチャー</string>
+    <string name="lock">画面ロック</string>
+    <string name="unlock">ロック解除</string>
+    <string name="subtitles">字幕</string>
+    <string name="audio_track">音声トラック</string>
+    <string name="previous">前の動画</string>
+    <string name="next">次の動画</string>
+    <string name="play_pause">再生 / 一時停止</string>
+    <string name="speed">再生速度</string>
+    <string name="aspect">画面サイズ</string>
 </resources>
