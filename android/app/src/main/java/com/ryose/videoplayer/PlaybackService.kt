@@ -16,6 +16,7 @@ import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaMetadataRetriever
+import android.net.wifi.WifiManager
 import android.net.Uri
 import android.os.Binder
 import android.os.Build
@@ -41,6 +42,8 @@ import org.videolan.libvlc.Dialog
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
+import org.videolan.libvlc.RendererDiscoverer
+import org.videolan.libvlc.RendererItem
 import org.videolan.libvlc.interfaces.IMedia
 import java.io.File
 import java.io.FileNotFoundException
@@ -62,6 +65,8 @@ class PlaybackService : Service() {
         fun onModesChanged() {}
         /** 再生が終わった・止められた */
         fun onPlaybackStopped() {}
+        /** キャスト先（Chromecast など）の一覧が変わった */
+        fun onRenderersChanged() {}
     }
 
     /** 曲の情報（音楽ファイルに埋め込まれたタイトル・アーティスト・ジャケット） */
@@ -184,6 +189,9 @@ class PlaybackService : Service() {
 
     override fun onDestroy() {
         savePosition()
+        stopRendererDiscovery()
+        renderer?.release()
+        renderer = null
         handler.removeCallbacksAndMessages(null)
         scope.cancel()
         runCatching { unregisterReceiver(noisyReceiver) }
@@ -226,6 +234,9 @@ class PlaybackService : Service() {
     fun ensureEngineUpToDate() {
         if (videoUiAttached || AppSettings.vlcOptions(this) == engineOptions) return
         savePosition()
+        stopRendererDiscovery()
+        renderer?.release()
+        renderer = null
         player.setEventListener(null)
         player.stop()
         player.release()
@@ -300,7 +311,7 @@ class PlaybackService : Service() {
         media.setHWDecoderEnabled(AppSettings.hwDecoding(this), false)
         if (startMs > 0) media.addOption(":start-time=${startMs / 1000.0}")
         if (paused) media.addOption(":start-paused")
-        if (!item.isAudio && !videoUiAttached) {
+        if (!item.isAudio && !videoUiAttached && renderer == null) {
             media.addOption(":no-video")
             videoTrackDisabled = true
         }
@@ -367,6 +378,11 @@ class PlaybackService : Service() {
     fun stopPlayback() {
         savePosition()
         player.stop()
+        if (renderer != null) {
+            player.setRenderer(null)
+            renderer?.release()
+            renderer = null
+        }
         items = emptyList()
         order = emptyList()
         index = 0
@@ -477,6 +493,78 @@ class PlaybackService : Service() {
             hasNext() -> next()
             else -> stopPlayback()
         }
+    }
+
+    // ---------- キャスト（Chromecast など） ----------
+
+    /** いまキャストしている先（null ならこの端末で再生） */
+    var renderer: RendererItem? = null
+        private set
+    /** 見つかったキャスト先（名前 → 機器） */
+    val renderers = linkedMapOf<String, RendererItem>()
+    private val rendererDiscoverers = mutableListOf<RendererDiscoverer>()
+    private var castMulticast: WifiManager.MulticastLock? = null
+
+    /** 同じネットワークのキャスト先を探し始める（キャストのメニューを開いている間） */
+    fun startRendererDiscovery() {
+        if (rendererDiscoverers.isNotEmpty()) return
+        castMulticast = runCatching {
+            applicationContext.getSystemService(WifiManager::class.java)
+                .createMulticastLock("VideoPlayerCast").apply {
+                    setReferenceCounted(false)
+                    acquire()
+                }
+        }.getOrNull()
+        val descriptions = runCatching { RendererDiscoverer.list(libVLC) }.getOrNull() ?: return
+        descriptions.forEach { d ->
+            val rd = RendererDiscoverer(libVLC, d.name)
+            rd.setEventListener(object : RendererDiscoverer.EventListener {
+                override fun onEvent(event: RendererDiscoverer.Event) {
+                    val item = event.item ?: return
+                    when (event.type) {
+                        RendererDiscoverer.Event.ItemAdded -> if (!renderers.containsKey(item.name)) {
+                            // イベントが終わると解放されるので、自分でも保持しておく
+                            item.retain()
+                            renderers[item.name] = item
+                            dispatch { it.onRenderersChanged() }
+                        }
+                        RendererDiscoverer.Event.ItemDeleted -> {
+                            renderers.remove(item.name)?.release()
+                            dispatch { it.onRenderersChanged() }
+                        }
+                    }
+                }
+            })
+            if (rd.start()) rendererDiscoverers += rd else rd.release()
+        }
+    }
+
+    fun stopRendererDiscovery() {
+        rendererDiscoverers.forEach {
+            it.stop()
+            it.release()
+        }
+        rendererDiscoverers.clear()
+        renderers.values.forEach { it.release() }
+        renderers.clear()
+        runCatching { castMulticast?.release() }
+        castMulticast = null
+    }
+
+    /** キャスト先を切り替える（null でこの端末に戻す）。再生中なら同じ位置から再生し直す */
+    fun castTo(item: RendererItem?) {
+        if (item == renderer) return
+        val active = currentItem != null
+        val position = (parkedAt ?: player.time).coerceAtLeast(0)
+        savePosition()
+        renderer?.release()
+        renderer = item?.also { it.retain() }
+        player.setRenderer(item)
+        if (active) {
+            parkedAt = null
+            playCurrent(position, false)
+        }
+        dispatch { it.onModesChanged() }
     }
 
     // ---------- A-B リピート ----------

@@ -213,12 +213,15 @@ class MainActivity : AppCompatActivity() {
 
     fun requestStorageAccess() {
         if (Build.VERSION.SDK_INT >= 30) {
-            try {
-                startActivity(
-                    Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName"))
-                )
-            } catch (_: Exception) {
-                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            // 機種（Android TV など）によっては設定画面が無いので、順に試す
+            val intents = listOf(
+                Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")),
+                Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION),
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")),
+            )
+            val opened = intents.any { runCatching { startActivity(it) }.isSuccess }
+            if (!opened) {
+                android.widget.Toast.makeText(this, "この端末では設定画面を開けませんでした", android.widget.Toast.LENGTH_LONG).show()
             }
         } else {
             permissionLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)

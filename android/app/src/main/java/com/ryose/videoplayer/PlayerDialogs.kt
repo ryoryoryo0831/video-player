@@ -84,6 +84,51 @@ object PlayerDialogs {
             .show()
     }
 
+    /** キャスト：同じネットワークの Chromecast などを探して、そこで再生する */
+    fun showCast(context: Context, svc: PlaybackService) {
+        svc.startRendererDiscovery()
+        val adapter = android.widget.ArrayAdapter<String>(context, android.R.layout.simple_list_item_1)
+        var targets: List<org.videolan.libvlc.RendererItem?> = emptyList()
+
+        fun refresh() {
+            val list = mutableListOf<org.videolan.libvlc.RendererItem?>()
+            val labels = mutableListOf<String>()
+            if (svc.renderer != null) {
+                list += null
+                labels += "📱  この端末で再生"
+            }
+            svc.renderers.values.forEach {
+                list += it
+                labels += (if (it == svc.renderer) "✓  " else "📺  ") + (it.displayName ?: it.name)
+            }
+            targets = list
+            adapter.clear()
+            adapter.addAll(labels)
+            // 探している間の案内（タップしても何もしない行）
+            if (svc.renderers.isEmpty()) adapter.add("探しています…\n同じ Wi-Fi の Chromecast などがここに出ます")
+        }
+
+        val listener = object : PlaybackService.Listener {
+            override fun onRenderersChanged() = refresh()
+        }
+        svc.addListener(listener)
+        refresh()
+        MaterialAlertDialogBuilder(context)
+            .setTitle("キャスト（テレビ・スピーカーで再生）")
+            .setAdapter(adapter) { _, which ->
+                val target = targets.getOrNull(which) ?: if (which < targets.size) null else return@setAdapter
+                svc.castTo(target)
+                val msg = if (target == null) "この端末での再生に戻しました" else "${target.displayName ?: target.name} で再生します"
+                android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("閉じる", null)
+            .setOnDismissListener {
+                svc.removeListener(listener)
+                svc.stopRendererDiscovery()
+            }
+            .show()
+    }
+
     /** 再生キュー：これから再生する順番の一覧。タップでその曲へ */
     fun showQueue(context: Context, svc: PlaybackService) {
         val order = svc.order

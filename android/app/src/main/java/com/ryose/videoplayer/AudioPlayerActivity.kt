@@ -276,6 +276,9 @@ class AudioPlayerActivity : AppCompatActivity() {
                     .show()
             }
         }
+        actions += (s.renderer?.let { "キャスト中：${it.displayName ?: it.name}" } ?: "キャスト（テレビ・スピーカーで再生）") to {
+            PlayerDialogs.showCast(this, s)
+        }
         actions += "設定" to { startActivity(android.content.Intent(this, SettingsActivity::class.java)) }
         actions += "再生を終了" to { s.stopPlayback() }
         MaterialAlertDialogBuilder(this)

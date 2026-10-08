@@ -72,6 +72,8 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var repeatButton: ImageButton
     private lateinit var unlockButton: ImageButton
     private lateinit var abIndicator: TextView
+    private lateinit var castButton: ImageButton
+    private lateinit var castInfo: TextView
     private lateinit var gestureInfo: TextView
     private lateinit var audioManager: AudioManager
 
@@ -121,6 +123,7 @@ class PlayerActivity : AppCompatActivity() {
         override fun onItemChanged() = updateItem()
         override fun onModesChanged() = updateModes()
         override fun onPlaybackStopped() = finish()
+        override fun onRenderersChanged() = updateModes()
     }
 
     private val dialogHandler by lazy { VlcDialogHandler(this) { svc?.currentItem?.uri } }
@@ -177,6 +180,8 @@ class PlayerActivity : AppCompatActivity() {
         repeatButton = findViewById(R.id.repeatButton)
         unlockButton = findViewById(R.id.unlockButton)
         abIndicator = findViewById(R.id.abIndicator)
+        castButton = findViewById(R.id.castButton)
+        castInfo = findViewById(R.id.castInfo)
         abIndicator.setOnClickListener {
             svc?.clearAb()
             showInfo("A-Bリピートを解除しました")
@@ -263,6 +268,7 @@ class PlayerActivity : AppCompatActivity() {
             when {
                 // 戻るボタンで閉じた・ピクチャーインピクチャーの小窓を閉じた
                 isFinishing || inPip -> s.stopPlayback()
+                s.renderer != null -> {}
                 // 設定が「音声だけ再生」なら映像を止めて音声だけ続ける
                 leaveAction == LeaveAction.AUDIO && s.isPlaying -> s.setVideoEnabled(false)
                 // 普段は止めて位置を覚えておき、戻ってきたら続きから
@@ -351,6 +357,11 @@ class PlayerActivity : AppCompatActivity() {
         val ab = s.abLabel()
         abIndicator.text = ab
         abIndicator.visibility = if (ab != null) View.VISIBLE else View.GONE
+        val cast = s.renderer
+        castButton.setImageResource(if (cast != null) R.drawable.ic_cast_connected else R.drawable.ic_cast)
+        castInfo.visibility = if (cast != null) View.VISIBLE else View.GONE
+        castInfo.text = cast?.let { "${it.displayName ?: it.name} で再生中" }
+        updatePipParams()
     }
 
     private fun setLength(ms: Long) {
@@ -640,8 +651,39 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun volumeText(percent: Int) = "🔊  音量 $percent%" + if (percent > 100) "（ブースト）" else ""
 
-    /** 音量ボタン：端末の音量が最大のときは、さらにブーストできる */
+    /**
+     * リモコン（Android TV）やキーボードでの操作と、音量ボタンでのブースト。
+     * コントロールが隠れているときは、左右でシーク、決定・上下でコントロールを表示する
+     */
     override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+        val s0 = svc
+        if (s0 != null && !locked) {
+            when (keyCode) {
+                android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, android.view.KeyEvent.KEYCODE_SPACE -> {
+                    s0.togglePlay(); showControls(); return true
+                }
+                android.view.KeyEvent.KEYCODE_MEDIA_PLAY -> { s0.play(); return true }
+                android.view.KeyEvent.KEYCODE_MEDIA_PAUSE -> { s0.pause(); showControls(autoHide = false); return true }
+                android.view.KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { s0.seekBy(doubleTapMs); showInfo("${doubleTapMs / 1000}秒  ⏩"); return true }
+                android.view.KeyEvent.KEYCODE_MEDIA_REWIND -> { s0.seekBy(-doubleTapMs); showInfo("⏪  ${doubleTapMs / 1000}秒"); return true }
+                android.view.KeyEvent.KEYCODE_MEDIA_NEXT -> { s0.next(); return true }
+                android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS -> { s0.previous(); return true }
+                android.view.KeyEvent.KEYCODE_DPAD_LEFT, android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> if (!controlsVisible) {
+                    val forward = keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT
+                    s0.seekBy(if (forward) 10_000 else -10_000)
+                    showInfo(if (forward) "10秒  ⏩" else "⏪  10秒")
+                    return true
+                }
+                android.view.KeyEvent.KEYCODE_DPAD_CENTER, android.view.KeyEvent.KEYCODE_ENTER,
+                android.view.KeyEvent.KEYCODE_DPAD_UP, android.view.KeyEvent.KEYCODE_DPAD_DOWN -> if (!controlsVisible) {
+                    showControls()
+                    playButton.requestFocus()
+                    return true
+                }
+            }
+            // コントロールを操作している間は隠さない
+            if (controlsVisible) scheduleHide()
+        }
         val s = svc
         if (s != null && AppSettings.audioBoost(this)) {
             val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
@@ -687,11 +729,18 @@ class PlayerActivity : AppCompatActivity() {
         findViewById<View>(R.id.audioButton).onTap { showAudioMenu() }
         speedButton.onTap { svc?.let { PlayerDialogs.showSpeed(this, it) { updateModes() } } }
         findViewById<View>(R.id.aspectButton).onTap { cycleScale() }
+        castButton.onTap { svc?.let { PlayerDialogs.showCast(this, it) } }
         findViewById<View>(R.id.rotateButton).onTap { toggleOrientation() }
 
         seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {
-                if (fromUser) timeCurrent.text = formatTime(progress.toLong())
+                if (!fromUser) return
+                timeCurrent.text = formatTime(progress.toLong())
+                // 指で動かしている最中でなければ（リモコンの左右キーなど）すぐに移動する
+                if (!userSeeking) {
+                    svc?.seekTo(progress.toLong())
+                    scheduleHide()
+                }
             }
 
             override fun onStartTrackingTouch(sb: SeekBar) {
@@ -807,7 +856,7 @@ class PlayerActivity : AppCompatActivity() {
             builder.setAspectRatio(r)
         }
         if (Build.VERSION.SDK_INT >= 31) {
-            builder.setAutoEnterEnabled(svc?.isPlaying == true && leaveAction == LeaveAction.PIP)
+            builder.setAutoEnterEnabled(svc?.isPlaying == true && leaveAction == LeaveAction.PIP && svc?.renderer == null)
         }
         return builder.build()
     }
@@ -823,7 +872,7 @@ class PlayerActivity : AppCompatActivity() {
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         // Android 12 以降は setAutoEnterEnabled で自動的に PiP になる
-        if (Build.VERSION.SDK_INT < 31 && svc?.isPlaying == true && leaveAction == LeaveAction.PIP) enterPip()
+        if (Build.VERSION.SDK_INT < 31 && svc?.isPlaying == true && leaveAction == LeaveAction.PIP && svc?.renderer == null) enterPip()
     }
 
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
