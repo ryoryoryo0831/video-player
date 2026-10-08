@@ -51,6 +51,13 @@ class PlayerActivity : AppCompatActivity() {
 
     private enum class Gesture { NONE, IGNORE, BRIGHTNESS, VOLUME, SEEK }
 
+    /** ホームボタンなどで動画の画面を離れたときの動作 */
+    private enum class LeaveAction(val label: String) {
+        PIP("小窓で再生（ピクチャーインピクチャー）"),
+        AUDIO("音声だけ再生"),
+        PAUSE("一時停止"),
+    }
+
     private lateinit var videoLayout: VLCVideoLayout
     private lateinit var touchLayer: View
     private lateinit var topBar: View
@@ -117,10 +124,12 @@ class PlayerActivity : AppCompatActivity() {
 
     private val connection = PlaybackConnection(this, autoCreate = true, onConnected = ::onServiceReady, onDisconnected = { svc = null })
 
-    /** 動画画面を離れたあとも音声だけ再生し続けるか（その他メニューで切り替え） */
-    private var backgroundAudio: Boolean
-        get() = getSharedPreferences("player", MODE_PRIVATE).getBoolean("bg_audio", false)
-        set(v) = getSharedPreferences("player", MODE_PRIVATE).edit().putBoolean("bg_audio", v).apply()
+    /** 画面を離れたときの動作（その他メニューで切り替え。初期設定は小窓で再生） */
+    private var leaveAction: LeaveAction
+        get() = getSharedPreferences("player", MODE_PRIVATE).getString("leave_action", null)
+            ?.let { runCatching { LeaveAction.valueOf(it) }.getOrNull() }
+            ?: if (hasPip) LeaveAction.PIP else LeaveAction.PAUSE
+        set(v) = getSharedPreferences("player", MODE_PRIVATE).edit().putString("leave_action", v.name).apply()
 
     // ---------- ライフサイクル ----------
 
@@ -217,8 +226,8 @@ class PlayerActivity : AppCompatActivity() {
             when {
                 // 戻るボタンで閉じた・ピクチャーインピクチャーの小窓を閉じた
                 isFinishing || inPip -> s.stopPlayback()
-                // 設定がオンなら音声だけ再生を続ける
-                backgroundAudio && s.isPlaying -> s.setVideoEnabled(false)
+                // 設定が「音声だけ再生」なら映像を止めて音声だけ続ける
+                leaveAction == LeaveAction.AUDIO && s.isPlaying -> s.setVideoEnabled(false)
                 // 普段は止めて位置を覚えておき、戻ってきたら続きから
                 else -> s.park()
             }
@@ -496,13 +505,23 @@ class PlayerActivity : AppCompatActivity() {
             (PlayerDialogs.sleepLabel(s)?.let { "スリープタイマー（$it）" } ?: "スリープタイマー") to {
                 PlayerDialogs.showSleepTimer(this, s)
             },
-            (if (backgroundAudio) "✓  画面を離れても音声を再生" else "      画面を離れても音声を再生") to {
-                backgroundAudio = !backgroundAudio
-                showInfo(if (backgroundAudio) "画面を離れても音声を再生します" else "画面を離れたら一時停止します")
-            },
+            "画面を離れたとき：${leaveAction.label}" to { showLeaveActionMenu() },
         )
         MaterialAlertDialogBuilder(this)
             .setItems(actions.map { it.first }.toTypedArray()) { _, which -> actions[which].second() }
+            .show()
+    }
+
+    private fun showLeaveActionMenu() {
+        val options = LeaveAction.entries.filter { it != LeaveAction.PIP || hasPip }
+        val current = leaveAction
+        MaterialAlertDialogBuilder(this)
+            .setTitle("ホームボタンなどで画面を離れたとき")
+            .setItems(options.map { (if (it == current) "✓  " else "      ") + it.label }.toTypedArray()) { _, which ->
+                leaveAction = options[which]
+                updatePipParams()
+                showInfo("画面を離れたとき：${options[which].label}")
+            }
             .show()
     }
 
@@ -648,7 +667,9 @@ class PlayerActivity : AppCompatActivity() {
             }
             builder.setAspectRatio(r)
         }
-        if (Build.VERSION.SDK_INT >= 31) builder.setAutoEnterEnabled(svc?.isPlaying == true)
+        if (Build.VERSION.SDK_INT >= 31) {
+            builder.setAutoEnterEnabled(svc?.isPlaying == true && leaveAction == LeaveAction.PIP)
+        }
         return builder.build()
     }
 
@@ -663,7 +684,7 @@ class PlayerActivity : AppCompatActivity() {
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         // Android 12 以降は setAutoEnterEnabled で自動的に PiP になる
-        if (Build.VERSION.SDK_INT < 31 && svc?.isPlaying == true) enterPip()
+        if (Build.VERSION.SDK_INT < 31 && svc?.isPlaying == true && leaveAction == LeaveAction.PIP) enterPip()
     }
 
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
