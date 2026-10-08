@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ビデオプレイヤー</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #181b22;
+    --panel-2: #20242d;
+    --text: #e8eaf0;
+    --muted: #8a91a0;
+    --accent: #4f8cff;
+    --accent-2: #7aa8ff;
+    --border: #2a2f3a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; flex: 1; }
+  button, .btn {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 12px; font-size: 13px; cursor: pointer;
+    font-family: inherit;
+  }
+  button:hover, .btn:hover { border-color: var(--accent); }
+  .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn-primary:hover { background: var(--accent-2); }
+
+  main { flex: 1; display: flex; min-height: 0; }
+  .stage-wrap { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+  .stage {
+    position: relative; flex: 1; background: #000;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden; min-height: 200px;
+  }
+  .stage video { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .stage.hide-cursor { cursor: none; }
+
+  .dropzone {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; color: var(--muted); text-align: center; padding: 20px;
+  }
+  .dropzone .icon { font-size: 56px; opacity: .6; }
+  .dropzone.dragover { background: rgba(79,140,255,.12); outline: 2px dashed var(--accent); outline-offset: -12px; }
+
+  .osd {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    background: rgba(0,0,0,.65); color: #fff; padding: 10px 18px; border-radius: 8px;
+    font-size: 18px; pointer-events: none; opacity: 0; transition: opacity .25s;
+  }
+  .osd.show { opacity: 1; }
+
+  /* コントロールバー */
+  .controls {
+    background: var(--panel); border-top: 1px solid var(--border);
+    padding: 8px 14px 10px;
+  }
+  .stage-wrap:fullscreen .controls {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    background: linear-gradient(transparent, rgba(0,0,0,.85));
+    border: none; transition: opacity .3s;
+  }
+  .stage-wrap:fullscreen.idle .controls { opacity: 0; }
+  .stage-wrap:fullscreen { position: relative; }
+
+  .seek-row { display: flex; align-items: center; gap: 10px; }
+  .time { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); min-width: 48px; }
+  .time.right { text-align: right; }
+  input[type=range] { accent-color: var(--accent); cursor: pointer; }
+  #seek { flex: 1; }
+
+  .btn-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+  .icon-btn {
+    background: transparent; border: none; font-size: 18px; width: 36px; height: 32px;
+    padding: 0; border-radius: 6px; color: var(--text);
+  }
+  .icon-btn:hover { background: var(--panel-2); }
+  .icon-btn.active { color: var(--accent); }
+  .spacer { flex: 1; }
+  #volume { width: 90px; }
+  select {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 6px; font-family: inherit; font-size: 12px;
+  }
+  .now-title {
+    font-size: 13px; color: var(--muted); margin-left: 8px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%;
+  }
+
+  /* プレイリスト */
+  aside {
+    width: 280px; border-left: 1px solid var(--border); background: var(--panel);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  aside.collapsed { display: none; }
+  aside h2 {
+    font-size: 13px; margin: 0; padding: 12px 14px; font-weight: 600;
+    border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;
+  }
+  #playlist { list-style: none; margin: 0; padding: 4px; overflow-y: auto; flex: 1; }
+  #playlist li {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: 13px;
+  }
+  #playlist li:hover { background: var(--panel-2); }
+  #playlist li.current { background: rgba(79,140,255,.18); color: var(--accent-2); }
+  #playlist li .idx { color: var(--muted); font-size: 11px; width: 18px; text-align: right; }
+  #playlist li .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #playlist li .del { background: none; border: none; color: var(--muted); padding: 0 4px; font-size: 14px; visibility: hidden; }
+  #playlist li:hover .del { visibility: visible; }
+  #playlist li .del:hover { color: #ff6b6b; }
+  .empty { color: var(--muted); font-size: 12px; padding: 16px; text-align: center; }
+
+  .help { font-size: 11px; color: var(--muted); padding: 10px 14px; border-top: 1px solid var(--border); line-height: 1.7; }
+  kbd {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 3px;
+    padding: 0 4px; font-size: 10px; font-family: inherit;
+  }
+
+  @media (max-width: 760px) {
+    main { flex-direction: column; }
+    aside { width: 100%; border-left: none; border-top: 1px solid var(--border); max-height: 40vh; }
+    .now-title { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🎬 ビデオプレイヤー</h1>
+  <label class="btn btn-primary">
+    ファイルを開く
+    <input type="file" id="fileInput" accept="video/*,audio/*,.mkv" multiple hidden>
+  </label>
+  <button id="togglePlaylist" title="プレイリストの表示切替">☰ リスト</button>
+</header>
+
+<main>
+  <div class="stage-wrap" id="stageWrap">
+    <div class="stage" id="stage">
+      <video id="video" playsinline></video>
+      <div class="dropzone" id="dropzone">
+        <div class="icon">📂</div>
+        <div>動画ファイルをここにドラッグ＆ドロップ<br>または「ファイルを開く」から選択</div>
+        <div style="font-size:12px">MP4 / WebM / MOV など（ブラウザが対応する形式）</div>
+      </div>
+      <div class="osd" id="osd"></div>
+    </div>
+
+    <div class="controls">
+      <div class="seek-row">
+        <span class="time" id="cur">0:00</span>
+        <input type="range" id="seek" min="0" max="1000" value="0" step="1">
+        <span class="time right" id="dur">0:00</span>
+      </div>
+      <div class="btn-row">
+        <button class="icon-btn" id="prevBtn" title="前の動画 (P)">⏮</button>
+        <button class="icon-btn" id="back10" title="10秒戻る (←)">⏪</button>
+        <button class="icon-btn" id="playBtn" title="再生/一時停止 (Space)">▶</button>
+        <button class="icon-btn" id="fwd10" title="10秒進む (→)">⏩</button>
+        <button class="icon-btn" id="nextBtn" title="次の動画 (N)">⏭</button>
+        <button class="icon-btn" id="muteBtn" title="ミュート (M)">🔊</button>
+        <input type="range" id="volume" min="0" max="1" step="0.01" value="1" title="音量 (↑↓)">
+        <span class="now-title" id="nowTitle"></span>
+        <span class="spacer"></span>
+        <button class="icon-btn" id="loopBtn" title="1曲リピート (R)">🔂</button>
+        <button class="icon-btn" id="shuffleBtn" title="シャッフル (S)">🔀</button>
+        <select id="speed" title="再生速度 ( < / > )">
+          <option value="0.25">0.25x</option>
+          <option value="0.5">0.5x</option>
+          <option value="0.75">0.75x</option>
+          <option value="1" selected>1.0x</option>
+          <option value="1.25">1.25x</option>
+          <option value="1.5">1.5x</option>
+          <option value="1.75">1.75x</option>
+          <option value="2">2.0x</option>
+        </select>
+        <button class="icon-btn" id="shotBtn" title="スクリーンショット保存 (C)">📷</button>
+        <button class="icon-btn" id="pipBtn" title="ピクチャーインピクチャー (I)">⧉</button>
+        <button class="icon-btn" id="fsBtn" title="全画面 (F)">⛶</button>
+      </div>
+    </div>
+  </div>
+
+  <aside id="sidebar">
+    <h2>
+      <span>プレイリスト <span id="count" style="color:var(--muted);font-weight:400"></span></span>
+      <button id="clearBtn" style="padding:2px 8px;font-size:11px">クリア</button>
+    </h2>
+    <ul id="playlist"></ul>
+    <div class="help">
+      <kbd>Space</kbd>/<kbd>K</kbd> 再生・停止　<kbd>←</kbd><kbd>→</kbd> 5秒移動<br>
+      <kbd>J</kbd><kbd>L</kbd> 10秒移動　<kbd>↑</kbd><kbd>↓</kbd> 音量　<kbd>M</kbd> ミュート<br>
+      <kbd>F</kbd> 全画面　<kbd>N</kbd>/<kbd>P</kbd> 次・前　<kbd>&lt;</kbd><kbd>&gt;</kbd> 速度<br>
+      <kbd>,</kbd><kbd>.</kbd> コマ送り（停止中）　<kbd>0</kbd>〜<kbd>9</kbd> 位置ジャンプ<br>
+      <kbd>R</kbd> リピート　<kbd>S</kbd> シャッフル　<kbd>C</kbd> スクショ　<kbd>I</kbd> PiP
+    </div>
+  </aside>
+</main>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const video = $('video'), stage = $('stage'), stageWrap = $('stageWrap');
+  const seek = $('seek'), cur = $('cur'), dur = $('dur');
+  const playBtn = $('playBtn'), muteBtn = $('muteBtn'), volume = $('volume');
+  const speed = $('speed'), loopBtn = $('loopBtn'), shuffleBtn = $('shuffleBtn');
+  const playlistEl = $('playlist'), dropzone = $('dropzone'), osd = $('osd');
+
+  /** @type {{name:string, url:string, key:string}[]} */
+  let playlist = [];
+  let index = -1;
+  let shuffle = false;
+  let seeking = false;
+
+  // ---------- 設定の保存（ブラウザに記憶） ----------
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem('vp:' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem('vp:' + k, JSON.stringify(v)); } catch {} },
+  };
+  video.volume = store.get('volume', 1);
+  video.muted = store.get('muted', false);
+  volume.value = video.volume;
+
+  // ---------- ユーティリティ ----------
+  const fmt = s => {
+    if (!isFinite(s)) return '0:00';
+    s = Math.floor(s);
+    const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+    return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(sec).padStart(2, '0');
+  };
+  let osdTimer;
+  const showOsd = text => {
+    osd.textContent = text;
+    osd.classList.add('show');
+    clearTimeout(osdTimer);
+    osdTimer = setTimeout(() => osd.classList.remove('show'), 700);
+  };
+
+  // ---------- プレイリスト ----------
+  function addFiles(files) {
+    const list = [...files].filter(f => f.type.startsWith('video/') || f.type.startsWith('audio/') || /\.(mkv|mp4|webm|mov|m4v|ogv|mp3|m4a|wav)$/i.test(f.name));
+    if (!list.length) { showOsd('対応していないファイルです'); return; }
+    const wasEmpty = playlist.length === 0;
+    for (const f of list) {
+      playlist.push({ name: f.name, url: URL.createObjectURL(f), key: f.name + ':' + f.size });
+    }
+    renderPlaylist();
+    if (wasEmpty || index === -1) load(playlist.length - list.length);
+  }
+
+  function renderPlaylist() {
+    playlistEl.innerHTML = '';
+    $('count').textContent = playlist.length ? `(${playlist.length})` : '';
+    if (!playlist.length) {
+      playlistEl.innerHTML = '<li class="empty" style="cursor:default">まだ動画がありません</li>';
+      return;
+    }
+    playlist.forEach((item, i) => {
+      const li = document.createElement('li');
+      if (i === index) li.className = 'current';
+      li.innerHTML = `<span class="idx">${i === index ? '▶' : i + 1}</span><span class="name"></span><button class="del" title="削除">✕</button>`;
+      li.querySelector('.name').textContent = item.name;
+      li.title = item.name;
+      li.onclick = e => {
+        if (e.target.classList.contains('del')) { remove(i); return; }
+        load(i);
+      };
+      playlistEl.appendChild(li);
+    });
+  }
+
+  function remove(i) {
+    URL.revokeObjectURL(playlist[i].url);
+    playlist.splice(i, 1);
+    if (i === index) {
+      if (playlist.length) load(Math.min(i, playlist.length - 1));
+      else { index = -1; video.removeAttribute('src'); video.load(); dropzone.hidden = false; $('nowTitle').textContent = ''; }
+    } else if (i < index) index--;
+    renderPlaylist();
+  }
+
+  function load(i, autoplay = true) {
+    if (i < 0 || i >= playlist.length) return;
+    savePosition();
+    index = i;
+    const item = playlist[i];
+    video.src = item.url;
+    video.playbackRate = parseFloat(speed.value);
+    dropzone.hidden = true;
+    $('nowTitle').textContent = item.name;
+    document.title = item.name + ' - ビデオプレイヤー';
+    renderPlaylist();
+    video.addEventListener('loadedmetadata', () => {
+      // 前回の続きから再生
+      const pos = store.get('pos:' + item.key, 0);
+      if (pos > 5 && pos < video.duration - 5) {
+        video.currentTime = pos;
+        showOsd('続きから再生 ' + fmt(pos));
+      }
+      if (autoplay) video.play().catch(() => {});
+    }, { once: true });
+  }
+
+  function next() {
+    if (!playlist.length) return;
+    if (shuffle && playlist.length > 1) {
+      let n; do { n = Math.floor(Math.random() * playlist.length); } while (n === index);
+      load(n);
+    } else if (index < playlist.length - 1) load(index + 1);
+  }
+  function prev() {
+    if (video.currentTime > 3) { video.currentTime = 0; return; }
+    if (index > 0) load(index - 1);
+  }
+
+  function savePosition() {
+    const item = playlist[index];
+    if (!item || !isFinite(video.duration)) return;
+    // 最後まで見た動画は位置をリセット
+    const t = video.currentTime >= video.duration - 5 ? 0 : video.currentTime;
+    store.set('pos:' + item.key, t);
+  }
+  setInterval(() => { if (!video.paused) savePosition(); }, 3000);
+  window.addEventListener('beforeunload', savePosition);
+
+  // ---------- 再生コントロール ----------
+  const togglePlay = () => {
+    if (index === -1) { $('fileInput').click(); return; }
+    video.paused ? video.play() : video.pause();
+  };
+  const skip = s => {
+    if (index === -1) return;
+    video.currentTime = Math.max(0, Math.min(video.duration || 0, video.currentTime + s));
+    showOsd((s > 0 ? '+' : '') + s + '秒');
+  };
+  const setVolume = v => {
+    video.volume = Math.max(0, Math.min(1, v));
+    video.muted = false;
+    showOsd('音量 ' + Math.round(video.volume * 100) + '%');
+  };
+  const setSpeed = dir => {
+    const opts = [...speed.options].map(o => o.value);
+    const i = Math.max(0, Math.min(opts.length - 1, opts.indexOf(speed.value) + dir));
+    speed.value = opts[i];
+    video.playbackRate = parseFloat(opts[i]);
+    showOsd('速度 ' + opts[i] + 'x');
+  };
+  const toggleFullscreen = () => {
+    document.fullscreenElement ? document.exitFullscreen() : stageWrap.requestFullscreen();
+  };
+  const togglePip = async () => {
+    try {
+      if (document.pictureInPictureElement) await document.exitPictureInPicture();
+      else if (index !== -1) await video.requestPictureInPicture();
+    } catch { showOsd('PiP は使用できません'); }
+  };
+  const screenshot = () => {
+    if (index === -1 || !video.videoWidth) return;
+    const c = document.createElement('canvas');
+    c.width = video.videoWidth; c.height = video.videoHeight;
+    c.getContext('2d').drawImage(video, 0, 0);
+    const a = document.createElement('a');
+    a.download = playlist[index].name.replace(/\.[^.]+$/, '') + '_' + fmt(video.currentTime).replace(/:/g, '-') + '.png';
+    a.href = c.toDataURL('image/png');
+    a.click();
+    showOsd('📷 保存しました');
+  };
+
+  playBtn.onclick = togglePlay;
+  video.onclick = togglePlay;
+  video.ondblclick = toggleFullscreen;
+  $('back10').onclick = () => skip(-10);
+  $('fwd10').onclick = () => skip(10);
+  $('nextBtn').onclick = next;
+  $('prevBtn').onclick = prev;
+  $('fsBtn').onclick = toggleFullscreen;
+  $('pipBtn').onclick = togglePip;
+  $('shotBtn').onclick = screenshot;
+  muteBtn.onclick = () => { video.muted = !video.muted; };
+  volume.oninput = () => { video.volume = +volume.value; video.muted = false; };
+  speed.onchange = () => { video.playbackRate = parseFloat(speed.value); };
+  loopBtn.onclick = () => { video.loop = !video.loop; loopBtn.classList.toggle('active', video.loop); showOsd(video.loop ? 'リピート ON' : 'リピート OFF'); };
+  shuffleBtn.onclick = () => { shuffle = !shuffle; shuffleBtn.classList.toggle('active', shuffle); showOsd(shuffle ? 'シャッフル ON' : 'シャッフル OFF'); };
+  $('clearBtn').onclick = () => { while (playlist.length) remove(playlist.length - 1); };
+  $('togglePlaylist').onclick = () => $('sidebar').classList.toggle('collapsed');
+  $('fileInput').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
+
+  // シークバー
+  seek.oninput = () => {
+    seeking = true;
+    cur.textContent = fmt(seek.value / 1000 * video.duration);
+  };
+  seek.onchange = () => {
+    if (isFinite(video.duration)) video.currentTime = seek.value / 1000 * video.duration;
+    seeking = false;
+  };
+
+  // ---------- 動画イベント ----------
+  video.addEventListener('play', () => playBtn.textContent = '⏸');
+  video.addEventListener('pause', () => playBtn.textContent = '▶');
+  video.addEventListener('timeupdate', () => {
+    if (seeking) return;
+    cur.textContent = fmt(video.currentTime);
+    seek.value = video.duration ? video.currentTime / video.duration * 1000 : 0;
+  });
+  video.addEventListener('loadedmetadata', () => dur.textContent = fmt(video.duration));
+  video.addEventListener('volumechange', () => {
+    muteBtn.textContent = video.muted || video.volume === 0 ? '🔇' : video.volume < 0.5 ? '🔉' : '🔊';
+    volume.value = video.muted ? 0 : video.volume;
+    store.set('volume', video.volume);
+    store.set('muted', video.muted);
+  });
+  video.addEventListener('ended', () => { savePosition(); next(); });
+  video.addEventListener('error', () => {
+    if (index !== -1) showOsd('この形式は再生できません');
+  });
+
+  // ---------- ドラッグ＆ドロップ ----------
+  ['dragenter', 'dragover'].forEach(ev => document.addEventListener(ev, e => {
+    e.preventDefault(); dropzone.hidden = false; dropzone.classList.add('dragover');
+  }));
+  ['dragleave', 'drop'].forEach(ev => document.addEventListener(ev, e => {
+    e.preventDefault();
+    if (ev === 'dragleave' && e.relatedTarget) return;
+    dropzone.classList.remove('dragover');
+    if (index !== -1) dropzone.hidden = true;
+  }));
+  document.addEventListener('drop', e => { if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
+
+  // ---------- キーボードショートカット ----------
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'SELECT' || (e.target.tagName === 'INPUT' && e.target.type !== 'range')) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const k = e.key;
+    const handled = true;
+    switch (k) {
+      case ' ': case 'k': case 'K': togglePlay(); break;
+      case 'ArrowLeft': skip(-5); break;
+      case 'ArrowRight': skip(5); break;
+      case 'j': case 'J': skip(-10); break;
+      case 'l': case 'L': skip(10); break;
+      case 'ArrowUp': setVolume(video.volume + 0.05); break;
+      case 'ArrowDown': setVolume(video.volume - 0.05); break;
+      case 'm': case 'M': video.muted = !video.muted; showOsd(video.muted ? 'ミュート' : 'ミュート解除'); break;
+      case 'f': case 'F': toggleFullscreen(); break;
+      case 'i': case 'I': togglePip(); break;
+      case 'c': case 'C': screenshot(); break;
+      case 'n': case 'N': next(); break;
+      case 'p': case 'P': prev(); break;
+      case 's': case 'S': shuffleBtn.click(); break;
+      case 'r': case 'R': loopBtn.click(); break;
+      case '<': setSpeed(-1); break;
+      case '>': setSpeed(1); break;
+      case ',': if (video.paused) video.currentTime = Math.max(0, video.currentTime - 1 / 30); break;
+      case '.': if (video.paused) video.currentTime += 1 / 30; break;
+      default:
+        if (/^[0-9]$/.test(k) && isFinite(video.duration)) { video.currentTime = video.duration * (+k / 10); break; }
+        return;
+    }
+    if (handled) e.preventDefault();
+  });
+
+  // ---------- 全画面時：マウス静止でUIを隠す ----------
+  let idleTimer;
+  const wake = () => {
+    stageWrap.classList.remove('idle'); stage.classList.remove('hide-cursor');
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      if (document.fullscreenElement && !video.paused) { stageWrap.classList.add('idle'); stage.classList.add('hide-cursor'); }
+    }, 2500);
+  };
+  stageWrap.addEventListener('mousemove', wake);
+  document.addEventListener('fullscreenchange', wake);
+
+  renderPlaylist();
+})();
+</script>
+</body>
+</html>

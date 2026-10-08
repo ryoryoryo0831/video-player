@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ビデオプレイヤー</string>
+    <string name="search">検索</string>
+    <string name="open_file">ファイルを開く</string>
+    <string name="sort">並べ替え</string>
+    <string name="sort_date">新しい順</string>
+    <string name="sort_name">名前順</string>
+    <string name="sort_duration">長い順</string>
+    <string name="refresh">再読み込み</string>
+    <string name="need_permission">端末内の動画を一覧表示するには、動画へのアクセスを許可してください。</string>
+    <string name="grant_permission">アクセスを許可</string>
+    <string name="no_videos">動画が見つかりませんでした。</string>
+    <string name="back">戻る</string>
+    <string name="rotate">画面の向き</string>
+    <string name="pip">ピクチャーインピクチャー</string>
+</resources>
