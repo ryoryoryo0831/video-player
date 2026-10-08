@@ -9,8 +9,8 @@
     <HorizontalScrollView
         android:id="@+id/pathScroll"
         android:layout_width="match_parent"
-        android:layout_height="44dp"
-        android:background="#141720"
+        android:layout_height="48dp"
+        android:background="@color/surface"
         android:scrollbars="none"
         android:visibility="gone">
 

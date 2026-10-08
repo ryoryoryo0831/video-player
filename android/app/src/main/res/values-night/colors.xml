@@ -8,4 +8,6 @@
     <color name="card_alt">#2A2F3A</color>
     <color name="text_primary">#E8EAF0</color>
     <color name="text_muted">#8A91A0</color>
+    <!-- アイコンの丸い背景（アクセント色を薄く） -->
+    <color name="accent_soft">#2E4F8CFF</color>
 </resources>

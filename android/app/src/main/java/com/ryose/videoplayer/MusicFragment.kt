@@ -213,14 +213,14 @@ class MusicFragment : BaseListFragment() {
         }
     }
 
-    override fun extraActions(row: Row): List<Pair<String, () -> Unit>> {
+    override fun extraActions(row: Row): List<SheetItem> {
         if (row !is Row.Folder) return emptyList()
         val items = songsOf(row).map { it.item }
         if (items.isEmpty()) return emptyList()
         return listOf(
-            "再生" to { requireActivity().playItems(items, 0) },
-            "シャッフル再生" to { requireActivity().playItems(items, items.indices.random(), shuffle = true) },
-            "プレイリストに追加" to { PlaylistDialogs.addToPlaylist(requireContext(), items) },
+            SheetItem(R.drawable.ic_play, "再生") { requireActivity().playItems(items, 0) },
+            SheetItem(R.drawable.ic_shuffle, "シャッフル再生") { requireActivity().playItems(items, items.indices.random(), shuffle = true) },
+            SheetItem(R.drawable.ic_playlist_add, "プレイリストに追加") { PlaylistDialogs.addToPlaylist(requireContext(), items) },
         )
     }
 

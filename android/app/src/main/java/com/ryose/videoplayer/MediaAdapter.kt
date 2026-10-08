@@ -57,6 +57,9 @@ class MediaAdapter(
             notifyDataSetChanged()
         }
 
+    /** お気に入りの動画・曲（行に ★ を付ける） */
+    var favoriteKeys: Set<String> = emptySet()
+
     /** 設定するとつまみを表示し、触ったときに呼ばれる（プレイリストの並べ替え用） */
     var dragListener: ((RecyclerView.ViewHolder) -> Unit)? = null
 
@@ -149,8 +152,17 @@ class MediaAdapter(
                 holder as MediaHolder
                 val item = row.item
                 holder.title.text = item.title
-                holder.meta.text = row.meta
-                holder.meta.visibility = if (row.meta.isEmpty()) View.GONE else View.VISIBLE
+                val fav = item.key in favoriteKeys
+                holder.meta.text = if (fav) {
+                    // お気に入りは先頭に色付きの ★
+                    android.text.SpannableString("★ " + row.meta).apply {
+                        setSpan(
+                            android.text.style.ForegroundColorSpan(androidx.core.content.ContextCompat.getColor(holder.itemView.context, R.color.accent)),
+                            0, 1, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+                        )
+                    }
+                } else row.meta
+                holder.meta.visibility = if (row.meta.isEmpty() && !fav) View.GONE else View.VISIBLE
                 holder.duration.text = formatTime(item.durationMs)
                 holder.duration.visibility = if (item.durationMs > 0) View.VISIBLE else View.GONE
                 if (item.isNetwork) {

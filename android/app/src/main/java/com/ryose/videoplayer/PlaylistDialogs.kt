@@ -16,7 +16,6 @@ object PlaylistDialogs {
         }
         val store = PlaylistStore(context)
         val lists = store.all()
-        val labels = lists.map { "${it.name}（${it.items.size}本）" } + "＋  新しいプレイリスト"
 
         fun addTo(p: SavedPlaylist) {
             val added = store.addItems(p.id, items)
@@ -25,13 +24,15 @@ object PlaylistDialogs {
             onDone()
         }
 
-        MaterialAlertDialogBuilder(context)
-            .setTitle("プレイリストに追加")
-            .setItems(labels.toTypedArray()) { _, i ->
-                if (i < lists.size) addTo(lists[i])
-                else promptName(context, "新しいプレイリスト", "") { name -> addTo(store.create(name)) }
-            }
-            .show()
+        ActionSheet.show(
+            context, "プレイリストに追加",
+            lists.map { p ->
+                val icon = if (p.id == FavoriteMedia.PLAYLIST_ID) R.drawable.ic_star else R.drawable.ic_playlist
+                SheetItem(icon, p.name, "${p.items.size} 本") { addTo(p) }
+            } + SheetItem(R.drawable.ic_add, "新しいプレイリスト") {
+                promptName(context, "新しいプレイリスト", "") { name -> addTo(store.create(name)) }
+            },
+        )
     }
 
     /** 名前を入力するダイアログ */

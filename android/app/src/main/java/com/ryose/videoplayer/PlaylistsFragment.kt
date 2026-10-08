@@ -30,10 +30,13 @@ class PlaylistsFragment : BaseListFragment() {
     }
 
     private fun load() {
-        val rows = store.all().map { p ->
+        // お気に入りはいつも一番上に
+        val lists = store.all().sortedBy { if (it.id == FavoriteMedia.PLAYLIST_ID) 0 else 1 }
+        val rows = lists.map { p ->
             val total = p.items.sumOf { it.durationMs }
             val info = "${p.items.size} 本" + if (total > 0) " · ${formatTime(total)}" else ""
-            Row.Folder(p.name, info, R.drawable.ic_playlist, id = p.id)
+            val icon = if (p.id == FavoriteMedia.PLAYLIST_ID) R.drawable.ic_star else R.drawable.ic_playlist
+            Row.Folder(p.name, info, icon, id = p.id)
         }
         showRows(
             rows,
@@ -47,21 +50,25 @@ class PlaylistsFragment : BaseListFragment() {
         startActivity(Intent(requireContext(), PlaylistActivity::class.java).putExtra(PlaylistActivity.EXTRA_ID, id))
     }
 
-    override fun extraActions(row: Row): List<Pair<String, () -> Unit>> {
+    override fun extraActions(row: Row): List<SheetItem> {
         val id = (row as? Row.Folder)?.id ?: return emptyList()
         val p = store.get(id) ?: return emptyList()
-        return listOf(
-            "再生" to { requireActivity().playItems(p.items, 0) },
-            "シャッフル再生" to {
+        val play = listOf(
+            SheetItem(R.drawable.ic_play, "再生") { if (p.items.isNotEmpty()) requireActivity().playItems(p.items, 0) },
+            SheetItem(R.drawable.ic_shuffle, "シャッフル再生") {
                 if (p.items.isNotEmpty()) requireActivity().playItems(p.items, p.items.indices.random(), shuffle = true)
             },
-            "名前を変更" to {
+        )
+        // お気に入りは名前の変更・削除はできない
+        if (id == FavoriteMedia.PLAYLIST_ID) return play
+        return play + listOf(
+            SheetItem(R.drawable.ic_edit, "名前を変更") {
                 PlaylistDialogs.promptName(requireContext(), "名前を変更", p.name) { name ->
                     store.rename(id, name)
                     load()
                 }
             },
-            "削除" to {
+            SheetItem(R.drawable.ic_delete, "削除") {
                 PlaylistDialogs.confirm(requireContext(), "「${p.name}」を削除しますか？\n（動画ファイルは削除されません）", "削除") {
                     store.delete(id)
                     load()

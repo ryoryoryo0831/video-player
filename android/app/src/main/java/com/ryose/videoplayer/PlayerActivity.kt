@@ -69,6 +69,7 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var touchLayer: View
     private lateinit var topBar: View
     private lateinit var bottomBar: View
+    private lateinit var centerControls: View
     private lateinit var titleView: TextView
     private lateinit var seekBar: SeekBar
     private lateinit var timeCurrent: TextView
@@ -189,6 +190,7 @@ class PlayerActivity : AppCompatActivity() {
         touchLayer = findViewById(R.id.touchLayer)
         topBar = findViewById(R.id.topBar)
         bottomBar = findViewById(R.id.bottomBar)
+        centerControls = findViewById(R.id.centerControls)
         titleView = findViewById(R.id.titleView)
         seekBar = findViewById(R.id.seekBar)
         timeCurrent = findViewById(R.id.timeCurrent)
@@ -480,43 +482,35 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
-    private fun trackLabel(t: MediaPlayer.TrackDescription, current: Int): String {
+    /** トラックの一覧（選ばれているものにチェック） */
+    private fun trackItems(
+        tracks: Array<MediaPlayer.TrackDescription>, current: Int, icon: Int, select: (Int) -> Unit,
+    ): List<SheetItem> = tracks.map { t ->
         val name = if (t.id == -1) "オフ" else t.name ?: "トラック ${t.id}"
-        return (if (t.id == current) "✓  " else "      ") + name
+        val on = t.id == current
+        SheetItem(if (on) R.drawable.ic_check else icon, name, if (on) "選択中" else null, active = on) { select(t.id) }
     }
 
     private fun showSubtitleMenu() {
         val player = svc?.player ?: return
         val tracks = player.spuTracks ?: emptyArray()
-        val current = player.spuTrack
-        val labels = tracks.map { trackLabel(it, current) } +
-            "＋  字幕ファイルを追加…" +
-            "⏱  タイミング調整…（現在 ${formatDelay(player.spuDelay)}）"
-        MaterialAlertDialogBuilder(this)
-            .setTitle("字幕")
-            .setItems(labels.toTypedArray()) { _, which ->
-                when {
-                    which < tracks.size -> player.setSpuTrack(tracks[which].id)
-                    which == tracks.size -> pickSubtitle.launch(arrayOf("*/*"))
-                    else -> showDelayDialog(subtitle = true)
-                }
-            }
-            .show()
+        ActionSheet.show(
+            this, "字幕",
+            trackItems(tracks, player.spuTrack, R.drawable.ic_subtitles) { player.setSpuTrack(it) } + listOf(
+                SheetItem(R.drawable.ic_add, "字幕ファイルを追加") { pickSubtitle.launch(arrayOf("*/*")) },
+                SheetItem(R.drawable.ic_timer, "タイミング調整", "現在 ${formatDelay(player.spuDelay)}") { showDelayDialog(subtitle = true) },
+            ),
+        )
     }
 
     private fun showAudioMenu() {
         val player = svc?.player ?: return
         val tracks = player.audioTracks ?: emptyArray()
-        val current = player.audioTrack
-        val labels = tracks.map { trackLabel(it, current) } +
-            "⏱  タイミング調整…（現在 ${formatDelay(player.audioDelay)}）"
-        MaterialAlertDialogBuilder(this)
-            .setTitle("音声トラック")
-            .setItems(labels.toTypedArray()) { _, which ->
-                if (which < tracks.size) player.setAudioTrack(tracks[which].id)
-                else showDelayDialog(subtitle = false)
-            }
-            .show()
+        ActionSheet.show(
+            this, "音声トラック",
+            trackItems(tracks, player.audioTrack, R.drawable.ic_audiotrack) { player.setAudioTrack(it) } +
+                SheetItem(R.drawable.ic_timer, "タイミング調整", "現在 ${formatDelay(player.audioDelay)}") { showDelayDialog(subtitle = false) },
+        )
     }
 
     private fun formatDelay(us: Long) = "%+.1f 秒".format(us / 1_000_000.0)
@@ -614,45 +608,54 @@ class PlayerActivity : AppCompatActivity() {
     private fun showMoreMenu() {
         val s = svc ?: return
         val item = s.currentItem ?: return
-        val actions = listOf<Pair<String, () -> Unit>>(
-            (if (s.shuffle) "シャッフルをオフにする" else "シャッフルをオンにする") to {
+        val fav = FavoriteMedia.isFavorite(this, item)
+        val items = buildList {
+            add(SheetItem(if (fav) R.drawable.ic_star else R.drawable.ic_star_border, if (fav) "お気に入りから外す" else "お気に入りに追加", active = fav) {
+                val added = FavoriteMedia.toggle(this@PlayerActivity, item)
+                showInfo(if (added) "★  お気に入りに追加しました" else "お気に入りから外しました")
+            })
+            add(SheetItem(R.drawable.ic_playlist_add, "プレイリストに追加") { PlaylistDialogs.addToPlaylist(this@PlayerActivity, listOf(item)) })
+            add(SheetItem(R.drawable.ic_queue, "再生キュー", "${s.orderPos + 1} / ${s.order.size}") { PlayerDialogs.showQueue(this@PlayerActivity, s) })
+            add(SheetItem(R.drawable.ic_shuffle, "シャッフル", if (s.shuffle) "オン" else "オフ", active = s.shuffle) {
                 s.toggleShuffle()
                 showInfo(if (s.shuffle) "シャッフル：オン" else "シャッフル：オフ")
-            },
-            "プレイリストに追加" to { PlaylistDialogs.addToPlaylist(this, listOf(item)) },
-            "再生キュー" to { PlayerDialogs.showQueue(this, s) },
-            "イコライザー" to { PlayerDialogs.showEqualizer(this, s) },
-            (PlayerDialogs.sleepLabel(s)?.let { "スリープタイマー（$it）" } ?: "スリープタイマー") to {
-                PlayerDialogs.showSleepTimer(this, s)
-            },
-            (s.abLabel()?.let { "A-Bリピート（$it）：次へ進む" } ?: "A-Bリピート（区間をくり返す）") to { showInfo(s.abStep()) },
-            *(if (s.chapters().isNotEmpty()) arrayOf<Pair<String, () -> Unit>>("チャプター" to { showChapters() }) else emptyArray()),
-            "時間を指定して移動" to { showJumpDialog() },
-            *(if ((s.player.videoTracksCount) > 1) arrayOf<Pair<String, () -> Unit>>("映像トラック" to { showVideoTrackMenu() }) else emptyArray()),
-            "デコード：${if (s.hwDecodingFor(item)) "ハードウェア" else "ソフトウェア"}（切り替える）" to {
+            })
+            add(SheetItem(R.drawable.ic_jump, "時間を指定して移動") { showJumpDialog() })
+            if (s.chapters().isNotEmpty()) add(SheetItem(R.drawable.ic_chapters, "チャプター", "${s.chapters().size} 個") { showChapters() })
+            add(SheetItem(R.drawable.ic_ab, "A-Bリピート", s.abLabel()?.let { "$it（タップで次へ）" } ?: "区間をくり返す", active = s.abLabel() != null) {
+                showInfo(s.abStep())
+            })
+            add(SheetItem(R.drawable.ic_timer, "スリープタイマー", PlayerDialogs.sleepLabel(s) ?: "オフ", active = PlayerDialogs.sleepLabel(s) != null) {
+                PlayerDialogs.showSleepTimer(this@PlayerActivity, s)
+            })
+            add(SheetItem(R.drawable.ic_equalizer, "イコライザー") { PlayerDialogs.showEqualizer(this@PlayerActivity, s) })
+            if (s.player.videoTracksCount > 1) add(SheetItem(R.drawable.ic_movie, "映像トラック") { showVideoTrackMenu() })
+            add(SheetItem(R.drawable.ic_memory, "デコード", if (s.hwDecodingFor(item)) "ハードウェア（タップでソフトウェアに）" else "ソフトウェア（タップでハードウェアに）") {
                 val hw = s.toggleHwDecoding()
                 showInfo(if (hw) "ハードウェアデコードに切り替えました" else "ソフトウェアデコードに切り替えました")
-            },
-            "スクリーンショット" to { takeScreenshot() },
-            "画面を離れたとき：${leaveAction.label}" to { showLeaveActionMenu() },
-            "設定" to { startActivity(Intent(this, SettingsActivity::class.java)) },
-        )
-        MaterialAlertDialogBuilder(this)
-            .setItems(actions.map { it.first }.toTypedArray()) { _, which -> actions[which].second() }
-            .show()
+            })
+            add(SheetItem(R.drawable.ic_camera, "スクリーンショット") { takeScreenshot() })
+            add(SheetItem(R.drawable.ic_pip, "画面を離れたとき", leaveAction.label) { showLeaveActionMenu() })
+            add(SheetItem(R.drawable.ic_settings, "設定") { startActivity(Intent(this@PlayerActivity, SettingsActivity::class.java)) })
+        }
+        ActionSheet.show(this, s.displayTitle(), items)
     }
 
     private fun showLeaveActionMenu() {
         val options = LeaveAction.entries.filter { it != LeaveAction.PIP || hasPip }
         val current = leaveAction
-        MaterialAlertDialogBuilder(this)
-            .setTitle("ホームボタンなどで画面を離れたとき")
-            .setItems(options.map { (if (it == current) "✓  " else "      ") + it.label }.toTypedArray()) { _, which ->
-                leaveAction = options[which]
-                updatePipParams()
-                showInfo("画面を離れたとき：${options[which].label}")
+        ActionSheet.show(this, "ホームボタンなどで画面を離れたとき", options.map { o ->
+            val icon = when (o) {
+                LeaveAction.PIP -> R.drawable.ic_pip
+                LeaveAction.AUDIO -> R.drawable.ic_music_note
+                LeaveAction.PAUSE -> R.drawable.ic_pause
             }
-            .show()
+            SheetItem(if (o == current) R.drawable.ic_check else icon, o.label, active = o == current) {
+                leaveAction = o
+                updatePipParams()
+                showInfo("画面を離れたとき：${o.label}")
+            }
+        })
     }
 
     /** 「1:23:45」「83:10」「90」（秒）などで入力した時間へ移動する */
@@ -698,11 +701,7 @@ class PlayerActivity : AppCompatActivity() {
     private fun showVideoTrackMenu() {
         val player = svc?.player ?: return
         val tracks = player.videoTracks ?: return
-        val current = player.videoTrack
-        MaterialAlertDialogBuilder(this)
-            .setTitle("映像トラック")
-            .setItems(tracks.map { trackLabel(it, current) }.toTypedArray()) { _, which -> player.setVideoTrack(tracks[which].id) }
-            .show()
+        ActionSheet.show(this, "映像トラック", trackItems(tracks, player.videoTrack, R.drawable.ic_movie) { player.setVideoTrack(it) })
     }
 
     /** チャプターの一覧（タップでそこへ移動） */
@@ -711,14 +710,14 @@ class PlayerActivity : AppCompatActivity() {
         val chapters = s.chapters()
         if (chapters.isEmpty()) return
         val current = s.player.chapter
-        val labels = chapters.mapIndexed { i, c ->
-            (if (i == current) "▶  " else "      ") + "${formatTime(c.timeOffset)}  " +
-                (c.name?.takeIf { it.isNotBlank() } ?: "チャプター ${i + 1}")
-        }
-        MaterialAlertDialogBuilder(this)
-            .setTitle("チャプター（${chapters.size}）")
-            .setItems(labels.toTypedArray()) { _, which -> s.player.setChapter(which) }
-            .show()
+        ActionSheet.show(this, "チャプター（${chapters.size}）", chapters.mapIndexed { i, c ->
+            SheetItem(
+                if (i == current) R.drawable.ic_play else R.drawable.ic_chapters,
+                c.name?.takeIf { it.isNotBlank() } ?: "チャプター ${i + 1}",
+                formatTime(c.timeOffset),
+                active = i == current,
+            ) { s.player.setChapter(i) }
+        })
     }
 
     /** いま表示している映像をそのまま画像として保存する */
@@ -923,6 +922,7 @@ class PlayerActivity : AppCompatActivity() {
         if (locked || inPip) return
         topBar.fadeIn()
         bottomBar.fadeIn()
+        centerControls.fadeIn()
         controlsVisible = true
         handler.removeCallbacks(hideControlsTask)
         if (autoHide) scheduleHide()
@@ -936,6 +936,7 @@ class PlayerActivity : AppCompatActivity() {
         handler.removeCallbacks(hideControlsTask)
         topBar.fadeOut()
         bottomBar.fadeOut()
+        centerControls.fadeOut()
         controlsVisible = false
         hideSystemUi()
     }

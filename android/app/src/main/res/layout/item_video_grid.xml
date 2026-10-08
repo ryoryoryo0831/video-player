@@ -6,7 +6,7 @@
     android:layout_height="wrap_content"
     android:background="?attr/selectableItemBackground"
     android:orientation="vertical"
-    android:padding="6dp">
+    android:padding="8dp">
 
     <com.google.android.material.card.MaterialCardView
         android:layout_width="match_parent"
@@ -37,7 +37,7 @@
                 android:paddingHorizontal="5dp"
                 android:paddingVertical="1dp"
                 android:textColor="#FFFFFF"
-                android:textSize="11sp" />
+                android:textSize="12sp" />
 
             <com.google.android.material.progressindicator.LinearProgressIndicator
                 android:id="@+id/progress"
@@ -60,7 +60,7 @@
         android:ellipsize="end"
         android:maxLines="2"
         android:textColor="@color/text_primary"
-        android:textSize="13sp" />
+        android:textSize="14sp" />
 
     <TextView
         android:id="@+id/meta"
@@ -69,7 +69,7 @@
         android:ellipsize="end"
         android:maxLines="1"
         android:textColor="@color/text_muted"
-        android:textSize="11sp" />
+        android:textSize="12sp" />
 
     <!-- グリッドでは並べ替えはしないので常に非表示 -->
     <ImageView

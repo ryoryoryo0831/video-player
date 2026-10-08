@@ -1,3 +1,10 @@
-<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
-    <solid android:color="#66000000" />
-</shape>
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 再生画面の丸いボタン（押すと少し明るくなる） -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="#40FFFFFF">
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="#73000000" />
+        </shape>
+    </item>
+</ripple>

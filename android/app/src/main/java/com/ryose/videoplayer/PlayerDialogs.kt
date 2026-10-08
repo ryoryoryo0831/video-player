@@ -112,17 +112,16 @@ object PlayerDialogs {
 
     fun showSleepTimer(context: Context, svc: PlaybackService) {
         val minutes = listOf(15, 30, 45, 60, 90, 120)
-        val labels = listOf("オフ") + minutes.map { "$it 分後" } + "この曲・動画の終わりまで"
-        MaterialAlertDialogBuilder(context)
-            .setTitle(sleepLabel(svc)?.let { "スリープタイマー（$it）" } ?: "スリープタイマー")
-            .setItems(labels.toTypedArray()) { _, which ->
-                when (which) {
-                    0 -> svc.cancelSleepTimer()
-                    labels.lastIndex -> svc.setSleepAtEnd()
-                    else -> svc.setSleepTimer(minutes[which - 1])
-                }
-            }
-            .show()
+        val on = sleepLabel(svc) != null
+        ActionSheet.show(
+            context, "スリープタイマー",
+            listOf(SheetItem(if (!on) R.drawable.ic_check else R.drawable.ic_close, "オフ", active = !on) { svc.cancelSleepTimer() }) +
+                minutes.map { m -> SheetItem(R.drawable.ic_timer, "$m 分後に停止") { svc.setSleepTimer(m) } } +
+                SheetItem(
+                    if (svc.sleepAtEnd) R.drawable.ic_check else R.drawable.ic_timer, "この曲・動画の終わりで停止", active = svc.sleepAtEnd,
+                ) { svc.setSleepAtEnd() },
+            subtitle = sleepLabel(svc) ?: "オフ",
+        )
     }
 
     /** キャスト：同じネットワークの Chromecast などを探して、そこで再生する */

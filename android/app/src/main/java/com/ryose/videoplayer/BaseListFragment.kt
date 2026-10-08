@@ -13,7 +13,6 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 
 /** 動画・フォルダ・履歴・プレイリストの各タブに共通する一覧画面 */
@@ -60,6 +59,7 @@ abstract class BaseListFragment : Fragment(R.layout.fragment_list) {
 
     protected fun showRows(rows: List<Row>, emptyMessage: String, emptyIconRes: Int = R.drawable.ic_movie) {
         loading.visibility = View.GONE
+        adapter.favoriteKeys = favoriteKeys()
         adapter.rows = rows
         if (rows.isEmpty()) {
             emptyText.text = emptyMessage
@@ -118,36 +118,57 @@ abstract class BaseListFragment : Fragment(R.layout.fragment_list) {
     }
 
     /** 長押しメニューに追加する項目（画面ごとに上書き） */
-    protected open fun extraActions(row: Row): List<Pair<String, () -> Unit>> = emptyList()
+    protected open fun extraActions(row: Row): List<SheetItem> = emptyList()
 
     private fun onRowLongClick(position: Int) {
         val row = adapter.rows.getOrNull(position) ?: return
-        val actions = mutableListOf<Pair<String, () -> Unit>>()
+        val ctx = requireContext()
+        val actions = mutableListOf<SheetItem>()
         if (row is Row.Media) {
-            actions += "再生" to { onRowClick(position) }
-            actions += "プレイリストに追加" to { PlaylistDialogs.addToPlaylist(requireContext(), listOf(row.item)) }
+            val item = row.item
+            actions += SheetItem(R.drawable.ic_play, "再生") { onRowClick(position) }
+            val fav = FavoriteMedia.isFavorite(ctx, item)
+            actions += SheetItem(
+                if (fav) R.drawable.ic_star else R.drawable.ic_star_border,
+                if (fav) "お気に入りから外す" else "お気に入りに追加",
+                active = fav,
+            ) {
+                val added = FavoriteMedia.toggle(ctx, item)
+                android.widget.Toast.makeText(
+                    ctx, if (added) "お気に入りに追加しました" else "お気に入りから外しました", android.widget.Toast.LENGTH_SHORT,
+                ).show()
+                onFavoritesChanged()
+            }
+            actions += SheetItem(R.drawable.ic_playlist_add, "プレイリストに追加") { PlaylistDialogs.addToPlaylist(ctx, listOf(item)) }
         }
         actions += extraActions(row)
         if (row is Row.Media && FileActions.isLocal(row.item)) {
-            val ctx = requireContext()
             val item = row.item
-            actions += "共有" to { FileActions.share(ctx, item) }
-            actions += "詳細" to { viewLifecycleOwner.lifecycleScope.launch { FileActions.showDetails(ctx, item) } }
-            if (FileActions.canRename(ctx, item)) actions += "名前を変更" to { FileActions.rename(ctx, item) { onFilesChanged() } }
-            if (FileActions.canDelete(ctx, item)) actions += "削除" to {
+            actions += SheetItem(R.drawable.ic_share, "共有") { FileActions.share(ctx, item) }
+            actions += SheetItem(R.drawable.ic_info, "詳細") { viewLifecycleOwner.lifecycleScope.launch { FileActions.showDetails(ctx, item) } }
+            if (FileActions.canRename(ctx, item)) {
+                actions += SheetItem(R.drawable.ic_edit, "名前を変更") { FileActions.rename(ctx, item) { onFilesChanged() } }
+            }
+            if (FileActions.canDelete(ctx, item)) actions += SheetItem(R.drawable.ic_delete, "削除") {
                 pendingDelete = item
                 FileActions.delete(ctx, item, { systemDelete.launch(it) }) { onFilesChanged() }
             }
         }
         if (actions.isEmpty()) return
-        val title = when (row) {
-            is Row.Media -> row.item.title
-            is Row.Folder -> row.name
+        val (title, subtitle) = when (row) {
+            is Row.Media -> row.item.title to row.meta.takeIf { it.isNotEmpty() }
+            is Row.Folder -> row.name to row.info.takeIf { it.isNotEmpty() }
             is Row.Header -> return
         }
-        MaterialAlertDialogBuilder(requireContext())
-            .setTitle(title)
-            .setItems(actions.map { it.first }.toTypedArray()) { _, i -> actions[i].second() }
-            .show()
+        ActionSheet.show(ctx, title, actions, subtitle)
     }
+
+    /** お気に入りを変えたあと、一覧の ★ を付け直す */
+    protected open fun onFavoritesChanged() {
+        adapter.favoriteKeys = favoriteKeys()
+        adapter.notifyItemRangeChanged(0, adapter.itemCount)
+    }
+
+    private fun favoriteKeys(): Set<String> =
+        PlaylistStore(requireContext()).get(FavoriteMedia.PLAYLIST_ID)?.items?.mapTo(HashSet()) { it.key } ?: emptySet()
 }

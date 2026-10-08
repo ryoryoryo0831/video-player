@@ -128,6 +128,11 @@ class PlaylistStore(context: Context) {
         p
     }
 
+    /** 決まった id のプレイリスト（お気に入りなど）が無ければ作る。いつも一番上に置く */
+    fun ensure(id: String, name: String) = synchronized(lock) {
+        if (all().none { it.id == id }) save(listOf(SavedPlaylist(id, name, emptyList())) + all())
+    }
+
     fun rename(id: String, name: String) = update(id) { it.copy(name = name) }
 
     fun delete(id: String) = synchronized(lock) { save(all().filterNot { it.id == id }) }

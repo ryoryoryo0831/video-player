@@ -65,9 +65,9 @@ class HistoryFragment : BaseListFragment() {
         requireActivity().playItems(listOf(row.item), 0)
     }
 
-    override fun extraActions(row: Row): List<Pair<String, () -> Unit>> {
+    override fun extraActions(row: Row): List<SheetItem> {
         if (row !is Row.Media) return emptyList()
-        return listOf("履歴から削除" to {
+        return listOf(SheetItem(R.drawable.ic_history, "履歴から削除") {
             history.remove(row.item.key)
             load()
         })

@@ -27,7 +27,9 @@
         android:focusable="false"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:padding="8dp">
+        android:paddingHorizontal="4dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="24dp">
 
         <ImageButton
             android:id="@+id/backButton"
@@ -39,38 +41,29 @@
             android:id="@+id/titleView"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
+            android:layout_marginStart="4dp"
             android:layout_weight="1"
             android:ellipsize="end"
-            android:maxLines="1"
+            android:maxLines="2"
+            android:shadowColor="#99000000"
+            android:shadowRadius="4"
             android:textColor="#FFFFFF"
-            android:textSize="16sp" />
+            android:textSize="17sp"
+            android:textStyle="bold" />
 
         <!-- A-Bリピート中の表示（タップで解除） -->
         <TextView
             android:id="@+id/abIndicator"
             android:layout_width="wrap_content"
-            android:layout_height="28dp"
+            android:layout_height="32dp"
             android:layout_marginHorizontal="4dp"
             android:background="@drawable/bg_ab_badge"
             android:gravity="center"
-            android:paddingHorizontal="8dp"
+            android:paddingHorizontal="10dp"
             android:textColor="#FFFFFF"
-            android:textSize="12sp"
+            android:textSize="13sp"
             android:textStyle="bold"
             android:visibility="gone" />
-
-        <ImageButton
-            android:id="@+id/aspectButton"
-            style="@style/PlayerButton"
-            android:contentDescription="@string/aspect"
-            android:src="@drawable/ic_aspect" />
-
-        <ImageButton
-            android:id="@+id/rotateButton"
-            style="@style/PlayerButton"
-            android:contentDescription="@string/rotate"
-            android:src="@drawable/ic_rotate" />
 
         <ImageButton
             android:id="@+id/castButton"
@@ -89,6 +82,47 @@
             style="@style/PlayerButton"
             android:contentDescription="@string/more"
             android:src="@drawable/ic_more" />
+    </LinearLayout>
+
+    <!-- 画面中央：前へ・再生/一時停止・次へ（大きく押しやすく） -->
+    <LinearLayout
+        android:id="@+id/centerControls"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:gravity="center"
+        android:orientation="horizontal">
+
+        <ImageButton
+            android:id="@+id/prevButton"
+            android:layout_width="64dp"
+            android:layout_height="64dp"
+            android:background="@drawable/bg_round_button"
+            android:contentDescription="@string/previous"
+            android:padding="16dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_skip_previous" />
+
+        <ImageButton
+            android:id="@+id/playButton"
+            android:layout_width="84dp"
+            android:layout_height="84dp"
+            android:layout_marginHorizontal="36dp"
+            android:background="@drawable/bg_round_button"
+            android:contentDescription="@string/play_pause"
+            android:padding="18dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_pause" />
+
+        <ImageButton
+            android:id="@+id/nextButton"
+            android:layout_width="64dp"
+            android:layout_height="64dp"
+            android:background="@drawable/bg_round_button"
+            android:contentDescription="@string/next"
+            android:padding="16dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_skip_next" />
     </LinearLayout>
 
     <!-- 下部コントロール -->
@@ -121,7 +155,9 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:paddingVertical="12dp" />
+                android:minHeight="6dp"
+                android:maxHeight="6dp"
+                android:paddingVertical="16dp" />
 
             <TextView
                 android:id="@+id/timeDuration"
@@ -129,6 +165,7 @@
                 android:text="0:00" />
         </LinearLayout>
 
+        <!-- 道具のボタン（画面の幅に合わせて均等に並べる） -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -137,72 +174,51 @@
 
             <ImageButton
                 android:id="@+id/lockButton"
-                style="@style/PlayerButton"
+                style="@style/PlayerToolButton"
                 android:contentDescription="@string/lock"
                 android:src="@drawable/ic_lock_open" />
 
             <ImageButton
                 android:id="@+id/subtitleButton"
-                style="@style/PlayerButton"
+                style="@style/PlayerToolButton"
                 android:contentDescription="@string/subtitles"
                 android:src="@drawable/ic_subtitles" />
 
             <ImageButton
                 android:id="@+id/audioButton"
-                style="@style/PlayerButton"
+                style="@style/PlayerToolButton"
                 android:contentDescription="@string/audio_track"
                 android:src="@drawable/ic_audiotrack" />
 
-            <Space
-                android:layout_width="0dp"
-                android:layout_height="1dp"
-                android:layout_weight="1" />
+            <ImageButton
+                android:id="@+id/aspectButton"
+                style="@style/PlayerToolButton"
+                android:contentDescription="@string/aspect"
+                android:src="@drawable/ic_aspect" />
 
             <ImageButton
-                android:id="@+id/prevButton"
-                style="@style/PlayerButton"
-                android:contentDescription="@string/previous"
-                android:src="@drawable/ic_skip_previous" />
-
-            <ImageButton
-                android:id="@+id/playButton"
-                style="@style/PlayerButton"
-                android:layout_width="56dp"
-                android:layout_height="56dp"
-                android:layout_marginHorizontal="4dp"
-                android:contentDescription="@string/play_pause"
-                android:scaleType="fitCenter"
-                android:padding="10dp"
-                android:src="@drawable/ic_pause" />
-
-            <ImageButton
-                android:id="@+id/nextButton"
-                style="@style/PlayerButton"
-                android:contentDescription="@string/next"
-                android:src="@drawable/ic_skip_next" />
-
-            <Space
-                android:layout_width="0dp"
-                android:layout_height="1dp"
-                android:layout_weight="1" />
+                android:id="@+id/rotateButton"
+                style="@style/PlayerToolButton"
+                android:contentDescription="@string/rotate"
+                android:src="@drawable/ic_rotate" />
 
             <TextView
                 android:id="@+id/speedButton"
-                android:layout_width="wrap_content"
-                android:layout_height="44dp"
-                android:minWidth="44dp"
-                android:paddingHorizontal="4dp"
+                android:layout_width="0dp"
+                android:layout_height="52dp"
+                android:layout_weight="1"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="@string/speed"
+                android:focusable="true"
                 android:gravity="center"
-                android:text="1.0x"
+                android:text="1x"
                 android:textColor="#FFFFFF"
-                android:textSize="13sp"
+                android:textSize="15sp"
                 android:textStyle="bold" />
 
             <ImageButton
                 android:id="@+id/repeatButton"
-                style="@style/PlayerButton"
+                style="@style/PlayerToolButton"
                 android:alpha="0.5"
                 android:contentDescription="@string/repeat"
                 android:src="@drawable/ic_repeat" />
@@ -226,9 +242,11 @@
     <!-- 画面ロック中だけ表示する解除ボタン -->
     <ImageButton
         android:id="@+id/unlockButton"
-        android:layout_width="52dp"
-        android:layout_height="52dp"
+        android:layout_width="60dp"
+        android:layout_height="60dp"
         android:layout_gravity="start|center_vertical"
+        android:padding="16dp"
+        android:scaleType="fitCenter"
         android:layout_marginStart="24dp"
         android:background="@drawable/bg_round_button"
         android:contentDescription="@string/unlock"

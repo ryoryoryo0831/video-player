@@ -16,7 +16,6 @@ import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.appbar.MaterialToolbar
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import java.io.File
 
 /** プレイリストの中身（再生・並べ替え・削除） */
@@ -85,6 +84,9 @@ class PlaylistActivity : AppCompatActivity() {
         supportActionBar?.subtitle = "${p.items.size} 本"
         adapter.rows = p.items.map { Row.Media(it, it.path?.let { path -> File(path).parentFile?.name }.orEmpty()) }
         emptyText.visibility = if (p.items.isEmpty()) View.VISIBLE else View.GONE
+        if (playlistId == FavoriteMedia.PLAYLIST_ID) {
+            emptyText.text = "お気に入りはまだありません。\n\n動画や曲を長押しして\n「お気に入りに追加」を選ぶと、ここに入ります。"
+        }
     }
 
     private fun currentItems() = adapter.rows.filterIsInstance<Row.Media>().map { it.item }
@@ -96,16 +98,29 @@ class PlaylistActivity : AppCompatActivity() {
 
     private fun onRowLongClick(position: Int) {
         val item = currentItems().getOrNull(position) ?: return
-        MaterialAlertDialogBuilder(this)
-            .setTitle(item.title)
-            .setItems(arrayOf("ここから再生", "プレイリストから外す")) { _, which ->
-                if (which == 0) onRowClick(position)
-                else {
+        val isFavorites = playlistId == FavoriteMedia.PLAYLIST_ID
+        ActionSheet.show(
+            this, item.title,
+            listOf(
+                SheetItem(R.drawable.ic_play, "ここから再生") { onRowClick(position) },
+                SheetItem(
+                    if (isFavorites) R.drawable.ic_star_border else R.drawable.ic_delete,
+                    if (isFavorites) "お気に入りから外す" else "プレイリストから外す",
+                ) {
                     store.setItems(playlistId, currentItems().filterIndexed { i, _ -> i != position })
                     load()
-                }
-            }
-            .show()
+                },
+                SheetItem(R.drawable.ic_playlist_add, "ほかのプレイリストに追加") { PlaylistDialogs.addToPlaylist(this, listOf(item)) },
+            ),
+        )
+    }
+
+    override fun onPrepareOptionsMenu(menu: Menu): Boolean {
+        // お気に入りは名前の変更・削除はできない
+        val fixed = playlistId == FavoriteMedia.PLAYLIST_ID
+        menu.findItem(R.id.action_rename)?.isVisible = !fixed
+        menu.findItem(R.id.action_delete)?.isVisible = !fixed
+        return super.onPrepareOptionsMenu(menu)
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {

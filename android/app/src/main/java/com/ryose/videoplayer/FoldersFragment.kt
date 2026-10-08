@@ -13,6 +13,8 @@ import android.widget.TextView
 import androidx.core.content.ContextCompat
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
+import androidx.core.view.MenuProvider
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -88,6 +90,7 @@ class FoldersFragment : BaseListFragment() {
         super.onViewCreated(view, savedInstanceState)
         savedInstanceState?.getStringArrayList(KEY_STACK)?.mapNotNullTo(stack) { Loc.parse(it) }
         requireActivity().onBackPressedDispatcher.addCallback(viewLifecycleOwner, backCallback)
+        requireActivity().addMenuProvider(menuProvider, viewLifecycleOwner, Lifecycle.State.RESUMED)
         // ネットワークの閲覧には VLC のエンジンが必要なので、再生サービスにつなぐ
         connection = PlaybackConnection(requireContext(), autoCreate = true, onConnected = { s ->
             svc = s
@@ -134,6 +137,79 @@ class FoldersFragment : BaseListFragment() {
         list.removeCallbacks(renderNetTask)
     }
 
+    // ---------- お気に入り ----------
+
+    /** 上のバーの星：今いる場所をお気に入りに追加・削除する */
+    private val menuProvider = object : MenuProvider {
+        override fun onCreateMenu(menu: android.view.Menu, menuInflater: android.view.MenuInflater) {
+            menuInflater.inflate(R.menu.folders_menu, menu)
+        }
+
+        override fun onPrepareMenu(menu: android.view.Menu) {
+            val item = menu.findItem(R.id.action_favorite) ?: return
+            val loc = current
+            item.isVisible = loc != null
+            val fav = loc != null && FavoriteFolders(requireContext()).contains(uriOf(loc))
+            item.setIcon(if (fav) R.drawable.ic_star else R.drawable.ic_star_border)
+            item.title = if (fav) "お気に入りから外す" else "お気に入りに追加"
+        }
+
+        override fun onMenuItemSelected(menuItem: android.view.MenuItem): Boolean {
+            if (menuItem.itemId != R.id.action_favorite) return false
+            current?.let { toggleFavorite(uriOf(it), labelOf(it)) }
+            return true
+        }
+    }
+
+    private fun uriOf(loc: Loc): Uri = when (loc) {
+        is Loc.Local -> Uri.fromFile(loc.dir)
+        is Loc.Net -> loc.uri
+    }
+
+    private fun toggleFavorite(uri: Uri, title: String) {
+        val added = FavoriteFolders(requireContext()).toggle(uri, title)
+        Toast.makeText(
+            requireContext(), if (added) "「$title」をお気に入りに追加しました" else "「$title」をお気に入りから外しました", Toast.LENGTH_SHORT,
+        ).show()
+        requireActivity().invalidateOptionsMenu()
+        if (current == null) renderTop()
+    }
+
+    private fun favoriteItem(uri: Uri, title: String): SheetItem {
+        val fav = FavoriteFolders(requireContext()).contains(uri)
+        return SheetItem(
+            if (fav) R.drawable.ic_star else R.drawable.ic_star_border,
+            if (fav) "お気に入りから外す" else "お気に入りに追加",
+            active = fav,
+        ) { toggleFavorite(uri, title) }
+    }
+
+    /** お気に入りを開く。端末内のフォルダは、ストレージの一番上からの道順も積んでおく（戻るで一つ上へ） */
+    private fun openFavorite(entry: FavoriteFolders.Entry) {
+        if (entry.isLocal) {
+            val dir = File(entry.uri.path ?: return)
+            val root = roots.firstOrNull { dir.path == it.dir.path || dir.path.startsWith(it.dir.path + "/") }
+            scrollStates[ROOT_KEY] = list.layoutManager?.onSaveInstanceState()
+            stack.clear()
+            if (root != null) {
+                var d: File? = dir
+                val chain = mutableListOf<File>()
+                while (d != null && d.path != root.dir.path) {
+                    chain += d
+                    d = d.parentFile
+                }
+                stack += Loc.Local(root.dir)
+                chain.asReversed().forEach { stack += Loc.Local(it) }
+            } else {
+                stack += Loc.Local(dir)
+            }
+            list.scrollToPosition(0)
+            load()
+        } else {
+            push(Loc.Net(entry.uri, entry.title))
+        }
+    }
+
     // 中に入っているときは、上のバーに場所を表示する
     override fun subtitle(): String? = if (stack.isEmpty()) "ストレージとネットワーク" else null
 
@@ -166,13 +242,15 @@ class FoldersFragment : BaseListFragment() {
             }
             bar.addView(TextView(ctx).apply {
                 this.text = text
-                textSize = 14f
+                textSize = 15f
+                minHeight = (48 * resources.displayMetrics.density).toInt()
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
                 maxWidth = (240 * resources.displayMetrics.density).toInt()
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(pad, 0, pad, 0)
-                setTextColor(if (isLast) android.graphics.Color.WHITE else ContextCompat.getColor(ctx, R.color.accent))
+                setTextColor(ContextCompat.getColor(ctx, if (isLast) R.color.text_primary else R.color.accent))
+                if (isLast) paint.isFakeBoldText = true
                 if (!isLast) {
                     setBackgroundResource(android.R.drawable.list_selector_background)
                     setOnClickListener { popTo(level) }
@@ -198,6 +276,7 @@ class FoldersFragment : BaseListFragment() {
 
     private fun load(restoreScroll: Parcelable? = null) {
         backCallback.isEnabled = isResumed && stack.isNotEmpty()
+        activity?.invalidateOptionsMenu()
         stopBrowser()
         renderPath()
         when (val loc = current) {
@@ -230,6 +309,14 @@ class FoldersFragment : BaseListFragment() {
         if (current != null || !isAdded) return
         val ctx = requireContext()
         val rows = mutableListOf<Row>()
+        val favorites = FavoriteFolders(ctx).all()
+        if (favorites.isNotEmpty()) {
+            rows += Row.Header("お気に入り")
+            favorites.forEach { f ->
+                val info = if (f.isLocal) f.uri.path.orEmpty() else "${kindLabel(f.uri)} · ${f.uri.host.orEmpty()}${f.uri.path.orEmpty()}"
+                rows += Row.Folder(f.title, info, R.drawable.ic_star, id = "fav:${f.uri}")
+            }
+        }
         rows += Row.Header("ストレージ")
         if (ctx.hasStorageAccess()) {
             roots.forEach { rows += Row.Folder(it.name, it.dir.path, R.drawable.ic_storage, it.dir, isStorage = true) }
@@ -419,6 +506,8 @@ class FoldersFragment : BaseListFragment() {
                     id != null && id.startsWith("server:") -> ServerStore(requireContext()).get(id.removePrefix("server:"))
                         ?.let { push(Loc.Net(it.uri, it.name)) }
                     id != null && id.startsWith("net:") -> push(Loc.Net(Uri.parse(id.removePrefix("net:")), row.name))
+                    id != null && id.startsWith("fav:") -> FavoriteFolders(requireContext()).all()
+                        .find { it.uri.toString() == id.removePrefix("fav:") }?.let { openFavorite(it) }
                 }
             }
             is Row.Media -> playMediaAt(position)
@@ -426,22 +515,42 @@ class FoldersFragment : BaseListFragment() {
         }
     }
 
-    override fun extraActions(row: Row): List<Pair<String, () -> Unit>> {
+    override fun extraActions(row: Row): List<SheetItem> {
         if (row !is Row.Folder) return emptyList()
         val id = row.id
         val dir = row.dir
         return when {
-            dir != null && !row.isStorage -> listOf(
-                "このフォルダを再生" to { withFolderMedia(dir) { requireActivity().playItems(it, 0) } },
-                "シャッフル再生" to { withFolderMedia(dir) { requireActivity().playItems(it, it.indices.random(), shuffle = true) } },
-                "プレイリストに追加" to { withFolderMedia(dir) { PlaylistDialogs.addToPlaylist(requireContext(), it) } },
-            )
+            dir != null -> buildList {
+                if (!row.isStorage) {
+                    add(SheetItem(R.drawable.ic_play, "このフォルダを再生") { withFolderMedia(dir) { requireActivity().playItems(it, 0) } })
+                    add(SheetItem(R.drawable.ic_shuffle, "シャッフル再生") {
+                        withFolderMedia(dir) { requireActivity().playItems(it, it.indices.random(), shuffle = true) }
+                    })
+                    add(SheetItem(R.drawable.ic_playlist_add, "プレイリストに追加") {
+                        withFolderMedia(dir) { PlaylistDialogs.addToPlaylist(requireContext(), it) }
+                    })
+                }
+                add(favoriteItem(Uri.fromFile(dir), row.name))
+            }
+            id != null && id.startsWith("fav:") -> {
+                val uri = Uri.parse(id.removePrefix("fav:"))
+                listOf(
+                    SheetItem(R.drawable.ic_edit, "表示名を変更") {
+                        PlaylistDialogs.promptName(requireContext(), "表示名を変更", row.name) { name ->
+                            FavoriteFolders(requireContext()).rename(uri, name)
+                            renderTop()
+                        }
+                    },
+                    SheetItem(R.drawable.ic_star_border, "お気に入りから外す") { toggleFavorite(uri, row.name) },
+                )
+            }
             id != null && id.startsWith("server:") -> {
                 val store = ServerStore(requireContext())
                 val server = store.get(id.removePrefix("server:")) ?: return emptyList()
                 listOf(
-                    "編集" to { NetworkDialogs.editServer(requireActivity(), server) { load() } },
-                    "削除" to {
+                    favoriteItem(server.uri, server.name),
+                    SheetItem(R.drawable.ic_edit, "編集") { NetworkDialogs.editServer(requireActivity(), server) { load() } },
+                    SheetItem(R.drawable.ic_delete, "削除") {
                         PlaylistDialogs.confirm(requireContext(), "「${server.name}」の登録を削除しますか？", "削除") {
                             store.remove(server.id)
                             load()
@@ -449,12 +558,15 @@ class FoldersFragment : BaseListFragment() {
                     },
                 )
             }
-            // 見つかった共有フォルダを、ログイン情報付きで登録する
-            id != null && id.startsWith("net:") && current == null -> {
+            id != null && id.startsWith("net:") -> buildList {
                 val uri = Uri.parse(id.removePrefix("net:"))
-                if (uri.scheme?.lowercase() in Server.PROTOCOLS.keys) {
-                    listOf("ログイン情報を設定して登録" to { NetworkDialogs.editServer(requireActivity(), null, uri) { load() } })
-                } else emptyList()
+                add(favoriteItem(uri, row.name))
+                // 見つかった共有フォルダを、ログイン情報付きで登録する
+                if (current == null && uri.scheme?.lowercase() in Server.PROTOCOLS.keys) {
+                    add(SheetItem(R.drawable.ic_login, "ログイン情報を設定して登録") {
+                        NetworkDialogs.editServer(requireActivity(), null, uri) { load() }
+                    })
+                }
             }
             else -> emptyList()
         }

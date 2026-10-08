@@ -39,12 +39,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var miniTitle: TextView
     private lateinit var miniSubtitle: TextView
     private lateinit var miniPlay: ImageButton
+    private lateinit var miniProgress: com.google.android.material.progressindicator.LinearProgressIndicator
     private var miniArtKey: String? = null
 
     private val miniListener = object : PlaybackService.Listener {
         override fun onPlayerEvent(e: MediaPlayer.Event) {
             when (e.type) {
                 MediaPlayer.Event.Playing, MediaPlayer.Event.Paused, MediaPlayer.Event.Stopped -> updateMini()
+                MediaPlayer.Event.TimeChanged -> updateMiniProgress()
             }
         }
         override fun onItemChanged() = updateMini()
@@ -115,6 +117,7 @@ class MainActivity : AppCompatActivity() {
         miniTitle = findViewById(R.id.miniTitle)
         miniSubtitle = findViewById(R.id.miniSubtitle)
         miniPlay = findViewById(R.id.miniPlay)
+        miniProgress = findViewById(R.id.miniProgress)
         miniPlayer.setOnClickListener { connection.service?.let { startActivity(it.screenIntent()) } }
         miniPlay.setOnClickListener { connection.service?.togglePlay() }
         findViewById<View>(R.id.miniNext).setOnClickListener { connection.service?.next() }
@@ -145,6 +148,7 @@ class MainActivity : AppCompatActivity() {
         miniSubtitle.text = s.displaySubtitle().ifEmpty { if (item.isAudio) "" else "動画" }
         miniSubtitle.visibility = if (miniSubtitle.text.isEmpty()) View.GONE else View.VISIBLE
         miniPlay.setImageResource(if (s.isPlaying) R.drawable.ic_pause else R.drawable.ic_play)
+        updateMiniProgress()
         // 画像は曲が変わったときだけ読み込み直す
         val art = s.meta?.art
         val key = item.key + (if (art != null) "#art" else "")
@@ -160,6 +164,13 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    /** ミニプレイヤーの上の細いバー（再生位置） */
+    private fun updateMiniProgress() {
+        val s = connection.service ?: return
+        val len = s.lengthMs
+        miniProgress.progress = if (len > 0) (s.player.time.coerceAtLeast(0) * 1000 / len).toInt().coerceIn(0, 1000) else 0
     }
 
     override fun onSaveInstanceState(outState: Bundle) {

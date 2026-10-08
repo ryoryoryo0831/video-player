@@ -19,7 +19,6 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
 import com.google.android.material.card.MaterialCardView
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import org.videolan.libvlc.MediaPlayer
 
 /** 音楽の再生画面（ジャケット・曲名・再生操作） */
@@ -259,34 +258,37 @@ class AudioPlayerActivity : AppCompatActivity() {
         val s = svc ?: return
         val item = s.currentItem ?: return
         val chapters = s.chapters()
-        val actions = mutableListOf<Pair<String, () -> Unit>>(
-            "プレイリストに追加" to { PlaylistDialogs.addToPlaylist(this, listOf(item)) },
-            (PlayerDialogs.sleepLabel(s)?.let { "スリープタイマー（$it）" } ?: "スリープタイマー") to {
-                PlayerDialogs.showSleepTimer(this, s)
-            },
-            (s.abLabel()?.let { "A-Bリピート（$it）：次へ進む" } ?: "A-Bリピート（区間をくり返す）") to {
-                Toast.makeText(this, s.abStep(), Toast.LENGTH_SHORT).show()
-            },
-        )
-        if (chapters.isNotEmpty()) {
-            actions += "チャプター（${chapters.size}）" to {
-                val labels = chapters.mapIndexed { i, c ->
-                    "${formatTime(c.timeOffset)}  " + (c.name?.takeIf { it.isNotBlank() } ?: "チャプター ${i + 1}")
-                }
-                MaterialAlertDialogBuilder(this)
-                    .setTitle("チャプター")
-                    .setItems(labels.toTypedArray()) { _, which -> s.player.setChapter(which) }
-                    .show()
-            }
+        val fav = FavoriteMedia.isFavorite(this, item)
+        val items = buildList {
+            add(SheetItem(if (fav) R.drawable.ic_star else R.drawable.ic_star_border, if (fav) "お気に入りから外す" else "お気に入りに追加", active = fav) {
+                val added = FavoriteMedia.toggle(this@AudioPlayerActivity, item)
+                Toast.makeText(this@AudioPlayerActivity, if (added) "お気に入りに追加しました" else "お気に入りから外しました", Toast.LENGTH_SHORT).show()
+            })
+            add(SheetItem(R.drawable.ic_playlist_add, "プレイリストに追加") { PlaylistDialogs.addToPlaylist(this@AudioPlayerActivity, listOf(item)) })
+            add(SheetItem(R.drawable.ic_timer, "スリープタイマー", PlayerDialogs.sleepLabel(s) ?: "オフ", active = PlayerDialogs.sleepLabel(s) != null) {
+                PlayerDialogs.showSleepTimer(this@AudioPlayerActivity, s)
+            })
+            add(SheetItem(R.drawable.ic_ab, "A-Bリピート", s.abLabel()?.let { "$it（タップで次へ）" } ?: "区間をくり返す", active = s.abLabel() != null) {
+                Toast.makeText(this@AudioPlayerActivity, s.abStep(), Toast.LENGTH_SHORT).show()
+            })
+            if (chapters.isNotEmpty()) add(SheetItem(R.drawable.ic_chapters, "チャプター", "${chapters.size} 個") {
+                val current = s.player.chapter
+                ActionSheet.show(this@AudioPlayerActivity, "チャプター", chapters.mapIndexed { i, c ->
+                    SheetItem(
+                        if (i == current) R.drawable.ic_play else R.drawable.ic_chapters,
+                        c.name?.takeIf { it.isNotBlank() } ?: "チャプター ${i + 1}",
+                        formatTime(c.timeOffset),
+                        active = i == current,
+                    ) { s.player.setChapter(i) }
+                })
+            })
+            add(SheetItem(
+                if (s.renderer != null) R.drawable.ic_cast_connected else R.drawable.ic_cast, "キャスト",
+                s.renderer?.let { "${it.displayName ?: it.name} で再生中" } ?: "テレビ・スピーカーで再生", active = s.renderer != null,
+            ) { PlayerDialogs.showCast(this@AudioPlayerActivity, s) })
+            add(SheetItem(R.drawable.ic_settings, "設定") { startActivity(android.content.Intent(this@AudioPlayerActivity, SettingsActivity::class.java)) })
+            add(SheetItem(R.drawable.ic_close, "再生を終了") { s.stopPlayback() })
         }
-        actions += (s.renderer?.let { "キャスト中：${it.displayName ?: it.name}" } ?: "キャスト（テレビ・スピーカーで再生）") to {
-            PlayerDialogs.showCast(this, s)
-        }
-        actions += "設定" to { startActivity(android.content.Intent(this, SettingsActivity::class.java)) }
-        actions += "再生を終了" to { s.stopPlayback() }
-        MaterialAlertDialogBuilder(this)
-            .setTitle(s.displayTitle())
-            .setItems(actions.map { it.first }.toTypedArray()) { _, which -> actions[which].second() }
-            .show()
+        ActionSheet.show(this, s.displayTitle(), items, s.displaySubtitle().ifEmpty { null })
     }
 }
