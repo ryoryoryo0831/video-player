@@ -34,6 +34,13 @@ android {
         }
     }
 
+    // libVLC のネイティブライブラリを圧縮して APK を小さくする
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
     signingConfigs {
         if (keystoreFile != null && keystorePassword != null) {
             create("release") {
