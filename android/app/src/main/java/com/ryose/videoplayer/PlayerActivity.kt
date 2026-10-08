@@ -122,6 +122,8 @@ class PlayerActivity : AppCompatActivity() {
         override fun onPlaybackStopped() = finish()
     }
 
+    private val dialogHandler by lazy { VlcDialogHandler(this) { svc?.currentItem?.uri } }
+
     private val connection = PlaybackConnection(this, autoCreate = true, onConnected = ::onServiceReady, onDisconnected = { svc = null })
 
     /** 画面を離れたときの動作（その他メニューで切り替え。初期設定は小窓で再生） */
@@ -196,6 +198,8 @@ class PlayerActivity : AppCompatActivity() {
     private fun onServiceReady(s: PlaybackService) {
         svc = s
         s.addListener(listener)
+        // ネットワーク再生でログインや証明書の確認を求められたときにダイアログを出す
+        org.videolan.libvlc.Dialog.setCallbacks(s.libVLC, dialogHandler)
         s.player.attachViews(videoLayout, null, true, false)
         s.videoUiAttached = true
         when {
@@ -217,6 +221,17 @@ class PlayerActivity : AppCompatActivity() {
         s.load(items, index, shuffle)
         val start = ResumeStore(this).get(items[index].key)
         if (start > 0) showInfo("続きから再生  ${formatTime(start)}")
+    }
+
+    override fun onResume() {
+        super.onResume()
+        svc?.let { org.videolan.libvlc.Dialog.setCallbacks(it.libVLC, dialogHandler) }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // 別の画面が前に出たら、そちらがダイアログを担当する
+        svc?.let { org.videolan.libvlc.Dialog.setCallbacks(it.libVLC, null) }
     }
 
     override fun onStop() {

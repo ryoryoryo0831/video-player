@@ -7,4 +7,10 @@
         android:orderInCategory="100"
         android:title="@string/open_file"
         app:showAsAction="ifRoom" />
+    <item
+        android:id="@+id/action_open_url"
+        android:icon="@drawable/ic_link"
+        android:orderInCategory="101"
+        android:title="@string/open_url"
+        app:showAsAction="ifRoom" />
 </menu>

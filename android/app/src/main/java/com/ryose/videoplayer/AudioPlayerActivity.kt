@@ -63,6 +63,8 @@ class AudioPlayerActivity : AppCompatActivity() {
         override fun onPlaybackStopped() = finish()
     }
 
+    private val dialogHandler by lazy { VlcDialogHandler(this) { svc?.currentItem?.uri } }
+
     private val connection = PlaybackConnection(this, autoCreate = true, onConnected = ::onServiceReady, onDisconnected = { svc = null })
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -151,6 +153,17 @@ class AudioPlayerActivity : AppCompatActivity() {
         connection.bind()
     }
 
+    override fun onResume() {
+        super.onResume()
+        svc?.let { org.videolan.libvlc.Dialog.setCallbacks(it.libVLC, dialogHandler) }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // 別の画面が前に出たら、そちらがダイアログを担当する
+        svc?.let { org.videolan.libvlc.Dialog.setCallbacks(it.libVLC, null) }
+    }
+
     override fun onStop() {
         super.onStop()
         svc?.removeListener(listener)
@@ -161,6 +174,8 @@ class AudioPlayerActivity : AppCompatActivity() {
     private fun onServiceReady(s: PlaybackService) {
         svc = s
         s.addListener(listener)
+        // ネットワーク再生でログインや証明書の確認を求められたときにダイアログを出す
+        org.videolan.libvlc.Dialog.setCallbacks(s.libVLC, dialogHandler)
         pendingLoad?.let { (items, index, shuffle) ->
             pendingLoad = null
             s.load(items, index, shuffle)

@@ -246,12 +246,17 @@ class PlaybackService : Service() {
 
         val media = try {
             val path = item.path
-            if (path != null && File(path).canRead()) {
-                Media(libVLC, path)
-            } else {
-                val pfd = contentResolver.openFileDescriptor(item.uri, "r") ?: throw FileNotFoundException()
-                openFd = pfd
-                Media(libVLC, pfd.fileDescriptor)
+            when {
+                path != null && File(path).canRead() -> Media(libVLC, path)
+                item.isNetwork -> Media(libVLC, item.uri).also { m ->
+                    // 登録したサーバーなら、ログイン情報を渡す
+                    ServerStore(this).optionsFor(item.uri).forEach { m.addOption(it) }
+                }
+                else -> {
+                    val pfd = contentResolver.openFileDescriptor(item.uri, "r") ?: throw FileNotFoundException()
+                    openFd = pfd
+                    Media(libVLC, pfd.fileDescriptor)
+                }
             }
         } catch (_: Exception) {
             Toast.makeText(this, "ファイルを開けませんでした：${item.title}", Toast.LENGTH_LONG).show()
@@ -392,7 +397,38 @@ class PlaybackService : Service() {
         dispatch { it.onModesChanged() }
     }
 
+    /**
+     * 再生したものが「プレイリスト」（.m3u の URL など）だった場合、中身の曲・動画に置き換えて再生する。
+     * 置き換えた場合は true
+     */
+    private fun expandSubItems(): Boolean {
+        if (lengthMs > 0) return false
+        val media = player.media ?: return false
+        val list = media.subItems()
+        try {
+            val n = list.count
+            if (n == 0) return false
+            val subs = (0 until n).map { i ->
+                val m = list.getMediaAt(i)
+                val uri = m.uri
+                val title = m.getMeta(IMedia.Meta.Title)?.takeIf { it.isNotBlank() }
+                    ?: uri.lastPathSegment ?: uri.toString()
+                m.release()
+                PlaylistItem(uri, title)
+            }
+            items = items.take(index) + subs + items.drop(index + 1)
+            buildOrder()
+            playCurrent(0, false)
+            dispatch { it.onModesChanged() }
+            return true
+        } finally {
+            list.release()
+            media.release()
+        }
+    }
+
     private fun onEnded() {
+        if (expandSubItems()) return
         currentItem?.let { resume.clear(it.key) }
         if (sleepAtEnd) {
             // スリープタイマー「この曲の終わりまで」
@@ -537,6 +573,8 @@ class PlaybackService : Service() {
     // ---------- 曲の情報・ジャケット ----------
 
     private fun loadMeta(item: PlaylistItem) {
+        // ネットワーク上のファイルは読み込みに時間がかかるので調べない
+        if (item.isNetwork) return
         scope.launch {
             val m = withContext(Dispatchers.IO) { readMeta(item) }
             if (currentItem != item) return@launch

@@ -40,7 +40,11 @@ data class PlaylistItem(
     val key: String get() = path ?: uri.toString()
 
     /** 音楽ファイルかどうか（拡張子で判断） */
-    val isAudio: Boolean get() = MediaFiles.isAudioName(path ?: title)
+    val isAudio: Boolean
+        get() = MediaFiles.isAudioName(path ?: (if (isNetwork) uri.lastPathSegment else null) ?: title)
+
+    /** ネットワーク上のもの（URL・NAS・DLNA など） */
+    val isNetwork: Boolean get() = path == null && uri.scheme !in LOCAL_SCHEMES
 
     fun toJson(): JSONObject = JSONObject()
         .put("uri", uri.toString())
@@ -58,6 +62,8 @@ data class PlaylistItem(
 
         fun fromFile(file: File, durationMs: Long = 0) =
             PlaylistItem(Uri.fromFile(file), file.name, file.path, durationMs)
+
+        private val LOCAL_SCHEMES = setOf("content", "file", "android.resource", null)
     }
 }
 

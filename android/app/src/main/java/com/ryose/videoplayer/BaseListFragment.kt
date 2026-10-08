@@ -107,6 +107,7 @@ abstract class BaseListFragment : Fragment(R.layout.fragment_list) {
         val title = when (row) {
             is Row.Media -> row.item.title
             is Row.Folder -> row.name
+            is Row.Header -> return
         }
         MaterialAlertDialogBuilder(requireContext())
             .setTitle(title)

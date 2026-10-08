@@ -8,6 +8,7 @@ import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
+import coil.dispose
 import coil.load
 import coil.request.videoFrameMillis
 import com.google.android.material.progressindicator.LinearProgressIndicator
@@ -27,6 +28,9 @@ sealed class Row {
 
     /** 動画の行 */
     data class Media(val item: PlaylistItem, val meta: String) : Row()
+
+    /** 見出し（「ストレージ」「ネットワーク」など） */
+    data class Header(val title: String) : Row()
 }
 
 class MediaAdapter(
@@ -69,14 +73,25 @@ class MediaAdapter(
         val dragHandle: ImageView = view.findViewById(R.id.dragHandle)
     }
 
-    override fun getItemViewType(position: Int) = if (data[position] is Row.Folder) 0 else 1
+    class HeaderHolder(view: View) : RecyclerView.ViewHolder(view) {
+        val title: TextView = view.findViewById(R.id.header)
+    }
+
+    override fun getItemViewType(position: Int) = when (data[position]) {
+        is Row.Folder -> 0
+        is Row.Media -> 1
+        is Row.Header -> 2
+    }
 
     override fun getItemCount() = data.size
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
         val inflater = LayoutInflater.from(parent.context)
-        return if (viewType == 0) FolderHolder(inflater.inflate(R.layout.item_folder, parent, false))
-        else MediaHolder(inflater.inflate(R.layout.item_video, parent, false))
+        return when (viewType) {
+            0 -> FolderHolder(inflater.inflate(R.layout.item_folder, parent, false))
+            2 -> HeaderHolder(inflater.inflate(R.layout.item_header, parent, false))
+            else -> MediaHolder(inflater.inflate(R.layout.item_video, parent, false))
+        }
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -87,6 +102,11 @@ class MediaAdapter(
             true
         }
         when (val row = data[position]) {
+            is Row.Header -> {
+                (holder as HeaderHolder).title.text = row.title
+                holder.itemView.setOnClickListener(null)
+                holder.itemView.setOnLongClickListener(null)
+            }
             is Row.Folder -> {
                 holder as FolderHolder
                 holder.icon.setImageResource(row.icon)
@@ -102,7 +122,11 @@ class MediaAdapter(
                 holder.meta.visibility = if (row.meta.isEmpty()) View.GONE else View.VISIBLE
                 holder.duration.text = formatTime(item.durationMs)
                 holder.duration.visibility = if (item.durationMs > 0) View.VISIBLE else View.GONE
-                if (item.isAudio) {
+                if (item.isNetwork) {
+                    // ネットワーク上のファイルはサムネイルを作らない（全体を読み込んでしまうため）
+                    holder.thumb.dispose()
+                    holder.thumb.setImageResource(if (item.isAudio) R.drawable.ic_music_note else R.drawable.ic_movie)
+                } else if (item.isAudio) {
                     // 音楽はファイルに埋め込まれたジャケット画像
                     holder.thumb.load(item.path?.let { AudioArt(it) }) {
                         placeholder(R.drawable.ic_music_note)

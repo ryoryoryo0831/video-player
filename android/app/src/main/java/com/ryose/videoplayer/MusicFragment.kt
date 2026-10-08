@@ -144,7 +144,7 @@ class MusicFragment : BaseListFragment() {
                 list.scrollToPosition(0)
             }
             is Row.Media -> playMediaAt(position)
-            null -> {}
+            else -> {}
         }
     }
 

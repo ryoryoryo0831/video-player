@@ -3,6 +3,7 @@
     <string name="app_name">ビデオプレイヤー</string>
     <string name="search">検索</string>
     <string name="open_file">ファイルを開く</string>
+    <string name="open_url">URLを開く</string>
     <string name="sort">並べ替え</string>
     <string name="sort_date">新しい順</string>
     <string name="sort_name">名前順</string>
