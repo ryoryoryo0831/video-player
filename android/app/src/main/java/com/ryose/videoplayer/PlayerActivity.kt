@@ -217,7 +217,9 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
-        connection.bind()
+        // 小窓（PiP）のまま画面が消えて戻ってきた場合は、つながったままなので表示し直すだけ
+        val s = svc
+        if (s != null) onServiceReady(s) else connection.bind()
     }
 
     private fun onServiceReady(s: PlaybackService) {
@@ -234,9 +236,8 @@ class PlayerActivity : AppCompatActivity() {
                 finish()
                 return
             }
-            // 裏に回っていた動画に戻ってきたとき
-            s.parkedAt != null -> s.resumeParked(paused = true)
-            s.videoTrackDisabled -> s.setVideoEnabled(true)
+            // 裏に回っていた動画に戻ってきたとき（読み込んだままなので、字幕などの選択はそのまま）
+            else -> s.restoreVideo()
         }
         refreshAll()
     }
@@ -245,7 +246,7 @@ class PlayerActivity : AppCompatActivity() {
         val (items, index, shuffle) = pendingLoad ?: return
         pendingLoad = null
         s.load(items, index, shuffle)
-        val start = ResumeStore(this).get(items[index].key)
+        val start = if (AppSettings.resume(this)) ResumeStore(this).get(items[index].key) else 0L
         if (start > 0) showInfo("続きから再生  ${formatTime(start)}")
     }
 
@@ -266,24 +267,34 @@ class PlayerActivity : AppCompatActivity() {
         val s = svc
         if (s != null) {
             when {
-                // 戻るボタンで閉じた・ピクチャーインピクチャーの小窓を閉じた
-                isFinishing || inPip -> s.stopPlayback()
+                // 戻るボタンで閉じた
+                isFinishing -> s.stopPlayback()
                 s.renderer != null -> {}
+                // 小窓（PiP）のまま画面が消えた：音声だけ続ける（小窓を閉じた場合は onPictureInPictureModeChanged で終了する）
+                inPip -> if (s.isPlaying) s.setVideoEnabled(false) else s.park()
                 // 設定が「音声だけ再生」なら映像を止めて音声だけ続ける
                 leaveAction == LeaveAction.AUDIO && s.isPlaying -> s.setVideoEnabled(false)
-                // 普段は止めて位置を覚えておき、戻ってきたら続きから
+                // 普段は一時停止して映像だけ止めておき、戻ってきたら続きから
                 else -> s.park()
             }
             s.videoUiAttached = false
             s.player.detachViews()
+            // 小窓のときは、閉じられたことを受け取れるようにつないだままにしておく
+            if (inPip && !isFinishing) return
             s.removeListener(listener)
         }
+        disconnect()
+    }
+
+    private fun disconnect() {
+        svc?.removeListener(listener)
         connection.unbind()
         svc = null
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        disconnect()
         handler.removeCallbacksAndMessages(null)
     }
 
@@ -327,7 +338,7 @@ class PlayerActivity : AppCompatActivity() {
     private fun refreshAll() {
         val s = svc ?: return
         updateItem()
-        val t = (s.parkedAt ?: s.player.time).coerceAtLeast(0)
+        val t = s.player.time.coerceAtLeast(0)
         seekBar.progress = t.toInt()
         timeCurrent.text = formatTime(t)
         playButton.setImageResource(if (s.isPlaying) R.drawable.ic_pause else R.drawable.ic_play)
@@ -335,12 +346,19 @@ class PlayerActivity : AppCompatActivity() {
         if (s.player.videoTracksCount > 0) onVideoReady()
     }
 
+    /** 表示中の動画（曲の情報が後から届いたときに、シークバーを 0 に戻さないように区別する） */
+    private var shownItemKey: String? = null
+
     private fun updateItem() {
         val s = svc ?: return
         titleView.text = s.displayTitle()
-        lengthMs = 0
-        seekBar.progress = 0
-        timeDuration.text = formatTime(0)
+        val key = s.currentItem?.key
+        if (key != shownItemKey) {
+            shownItemKey = key
+            lengthMs = 0
+            seekBar.progress = 0
+            timeDuration.text = formatTime(0)
+        }
         setLength(s.lengthMs)
         updateModes()
     }
@@ -384,8 +402,9 @@ class PlayerActivity : AppCompatActivity() {
         videoH = h
         if (!orientationLocked && AppSettings.autoRotate(this)) {
             requestedOrientation =
-                if (w >= h) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                else ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                // USER_* なら端末の「画面の自動回転」がオフのときはそれに従う
+                if (w >= h) ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE
+                else ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
         }
         s.player.setVideoScale(scales[scaleIndex].first)
         updatePipParams()
@@ -395,16 +414,21 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun addSubtitleFromUri(uri: Uri) {
         lifecycleScope.launch {
+            val name = withContext(Dispatchers.IO) { queryDisplayName(uri) } ?: "subtitle.srt"
+            if (!Subtitles.isSubtitleName(name)) {
+                Toast.makeText(this@PlayerActivity, "字幕ファイル（.srt .ass .ssa .vtt .smi .sub .idx）を選んでください", Toast.LENGTH_LONG).show()
+                return@launch
+            }
             val file = withContext(Dispatchers.IO) {
                 runCatching {
-                    val name = queryDisplayName(uri) ?: "subtitle.srt"
-                    val bytes = contentResolver.openInputStream(uri)!!.use { it.readBytes() }
-                    Subtitles.saveToCache(this@PlayerActivity, name, bytes)
+                    // 間違えて大きなファイルを選んでもメモリが足りなくならないように、上限を超えたら読まない
+                    val bytes = contentResolver.openInputStream(uri)!!.use { Subtitles.readLimited(it) }
+                    bytes?.let { Subtitles.saveToCache(this@PlayerActivity, uri.toString(), name, it) }
                 }.getOrNull()
             }
             val s = svc
             if (file == null || s == null) {
-                Toast.makeText(this@PlayerActivity, "字幕ファイルを読み込めませんでした", Toast.LENGTH_LONG).show()
+                Toast.makeText(this@PlayerActivity, "字幕ファイルを読み込めませんでした（大きすぎるか、読めないファイルです）", Toast.LENGTH_LONG).show()
                 return@launch
             }
             s.addSubtitle(file)
@@ -796,6 +820,10 @@ class PlayerActivity : AppCompatActivity() {
         if (autoHide) scheduleHide()
     }
 
+    private fun toggleControls() {
+        if (controlsVisible) hideControls() else showControls()
+    }
+
     private fun hideControls() {
         handler.removeCallbacks(hideControlsTask)
         topBar.fadeOut()
@@ -884,6 +912,8 @@ class PlayerActivity : AppCompatActivity() {
             gestureInfo.visibility = View.GONE
         } else if (lifecycle.currentState == Lifecycle.State.CREATED) {
             // 小窓が閉じられた
+            svc?.stopPlayback()
+            disconnect()
             finish()
         }
     }
@@ -899,8 +929,14 @@ class PlayerActivity : AppCompatActivity() {
         val detector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onDown(e: MotionEvent) = true
 
+            // ダブルタップを使わない設定なら、ダブルタップ待ちをせずにすぐ反応する
+            override fun onSingleTapUp(e: MotionEvent): Boolean {
+                if (!gestureDoubleTap) toggleControls()
+                return false
+            }
+
             override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                if (controlsVisible) hideControls() else showControls()
+                if (gestureDoubleTap) toggleControls()
                 return true
             }
 
@@ -992,7 +1028,11 @@ class PlayerActivity : AppCompatActivity() {
         val b = window.attributes.screenBrightness
         if (b >= 0) return b
         return try {
-            Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS) / 255f
+            // 機種によって最大値が 255 とは限らない（1023 や 4095 など）ので、端末の設定値の最大を調べる
+            val res = android.content.res.Resources.getSystem()
+            val id = res.getIdentifier("config_screenBrightnessSettingMaximum", "integer", "android")
+            val max = (if (id != 0) res.getInteger(id) else 255).takeIf { it > 0 } ?: 255
+            (Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS).toFloat() / max).coerceIn(0.01f, 1f)
         } catch (_: Exception) {
             0.5f
         }

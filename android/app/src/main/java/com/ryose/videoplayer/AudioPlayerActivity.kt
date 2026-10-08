@@ -194,7 +194,7 @@ class AudioPlayerActivity : AppCompatActivity() {
         lengthMs = 0
         setLength(s.lengthMs)
         if (!userSeeking) {
-            val t = (s.parkedAt ?: s.player.time).coerceAtLeast(0)
+            val t = s.player.time.coerceAtLeast(0)
             seekBar.progress = t.toInt()
             timeCurrent.text = formatTime(t)
         }

@@ -15,6 +15,8 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- 画面が消えていてもネットワーク再生の Wi-Fi が省電力で途切れないように -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- Android TV でも使えるように（タッチ画面は必須にしない） -->
     <uses-feature
@@ -63,6 +65,8 @@
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
             android:exported="true"
             android:launchMode="singleTask"
+            android:taskAffinity="com.ryose.videoplayer.player"
+            android:autoRemoveFromRecents="true"
             android:resizeableActivity="true"
             android:supportsPictureInPicture="true"
             android:theme="@style/Theme.VideoPlayer.Player">
@@ -74,6 +78,31 @@
                 <data android:scheme="content" />
                 <data android:scheme="file" />
                 <data android:mimeType="video/*" />
+            </intent-filter>
+            <!-- ネット上の動画・ライブ配信（ブラウザなどから「このアプリで開く」） -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="http" />
+                <data android:scheme="https" />
+                <data android:scheme="rtsp" />
+                <data android:scheme="rtmp" />
+                <data android:mimeType="video/*" />
+                <data android:mimeType="application/x-mpegURL" />
+                <data android:mimeType="application/vnd.apple.mpegurl" />
+                <data android:mimeType="application/dash+xml" />
+            </intent-filter>
+            <!-- 種類が分からないファイル（.mkv などが application/octet-stream で渡される場合） -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/x-matroska" />
+                <data android:mimeType="application/mp4" />
+                <data android:mimeType="application/x-mpegURL" />
+                <data android:mimeType="application/vnd.apple.mpegurl" />
             </intent-filter>
         </activity>
 
@@ -87,6 +116,14 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="content" />
                 <data android:scheme="file" />
+                <data android:mimeType="audio/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="http" />
+                <data android:scheme="https" />
                 <data android:mimeType="audio/*" />
             </intent-filter>
         </activity>

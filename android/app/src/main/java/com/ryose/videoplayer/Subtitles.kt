@@ -1,7 +1,10 @@
 package com.ryose.videoplayer
 
 import android.content.Context
+import android.icu.text.CharsetDetector
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.InputStream
 import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.Charset
@@ -15,6 +18,27 @@ object Subtitles {
     private val TEXT_EXT = setOf("srt", "ass", "ssa", "vtt", "smi", "sami")
     private val ALL_EXT = TEXT_EXT + setOf("sub", "idx")
     private const val MAX_TEXT_SIZE = 10L * 1024 * 1024
+    /** 「字幕ファイルを追加」で読み込む上限（VobSub の .sub は大きいことがあるので少し余裕を持たせる） */
+    private const val MAX_ADD_SIZE = 64L * 1024 * 1024
+    /** キャッシュに作った字幕を消すまでの日数 */
+    private const val CACHE_DAYS = 14
+
+    fun isSubtitleName(name: String) = name.substringAfterLast('.', "").lowercase() in ALL_EXT
+
+    /** 上限までしか読まない。上限を超えるファイルなら null */
+    fun readLimited(input: InputStream): ByteArray? {
+        val out = ByteArrayOutputStream()
+        val buf = ByteArray(64 * 1024)
+        var total = 0L
+        while (true) {
+            val n = input.read(buf)
+            if (n < 0) break
+            total += n
+            if (total > MAX_ADD_SIZE) return null
+            out.write(buf, 0, n)
+        }
+        return out.toByteArray()
+    }
 
     /** 動画と同じフォルダにある、ファイル名が同じ字幕（例: movie.srt, movie.ja.srt）を探す。日本語らしいものを先頭に */
     fun findFor(videoPath: String): List<File> {
@@ -22,7 +46,10 @@ object Subtitles {
         val dir = video.parentFile ?: return emptyList()
         val base = video.nameWithoutExtension.lowercase()
         val found = dir.listFiles { f ->
-            f.isFile && f.extension.lowercase() in ALL_EXT && f.name.lowercase().startsWith(base)
+            if (!f.isFile || f.extension.lowercase() !in ALL_EXT) return@listFiles false
+            // movie.srt / movie.ja.srt は対象。movie2.srt のように別の動画の字幕は対象外
+            val stem = f.nameWithoutExtension.lowercase()
+            stem == base || stem.startsWith("$base.")
         } ?: return emptyList()
         // VobSub は .idx を読めば .sub も一緒に読まれるので .sub 単体は除く
         val idxBases = found.filter { it.extension.equals("idx", true) }.map { it.nameWithoutExtension }
@@ -45,23 +72,40 @@ object Subtitles {
         if (file.extension.lowercase() !in TEXT_EXT || file.length() > MAX_TEXT_SIZE) return file
         return try {
             val converted = toUtf8IfNeeded(file.readBytes()) ?: return file
-            writeCache(context, file.name, converted)
+            writeCache(context, file.path, file.name, converted)
         } catch (_: Exception) {
             file
         }
     }
 
-    /** 「字幕ファイルを追加」で選ばれたファイルの中身をキャッシュに保存して返す */
-    fun saveToCache(context: Context, name: String, bytes: ByteArray): File {
+    /** 「字幕ファイルを追加」で選ばれたファイルの中身をキャッシュに保存して返す（source は元の場所。同じ名前の別の字幕と区別する） */
+    fun saveToCache(context: Context, source: String, name: String, bytes: ByteArray): File {
         val ext = name.substringAfterLast('.', "").lowercase()
         val data = if (ext in TEXT_EXT) toUtf8IfNeeded(bytes) ?: bytes else bytes
-        return writeCache(context, name, data)
+        return writeCache(context, source, name, data)
     }
 
-    private fun writeCache(context: Context, name: String, data: ByteArray): File {
-        val dir = File(context.cacheDir, "subtitles").apply { mkdirs() }
+    /**
+     * 字幕をキャッシュに書き出す。元の場所ごとにフォルダを分けるので、別の動画の同じ名前の字幕（movie.srt など）で上書きされない。
+     * VobSub（.idx と .sub）は同じフォルダに同じ名前で並んでいる必要があるので、ファイル名はそのまま使う
+     */
+    private fun writeCache(context: Context, source: String, name: String, data: ByteArray): File {
+        val root = File(context.cacheDir, "subtitles")
+        cleanOldCache(root)
+        val key = source.hashCode().toUInt().toString(16)
+        val dir = File(root, key).apply { mkdirs() }
         val safeName = name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
         return File(dir, safeName).apply { writeBytes(data) }
+    }
+
+    /** しばらく使っていないキャッシュの字幕を消す */
+    private fun cleanOldCache(root: File) {
+        val limit = System.currentTimeMillis() - CACHE_DAYS * 24L * 60 * 60 * 1000
+        root.walkBottomUp().forEach { f ->
+            if (f == root) return@forEach
+            if (f.isFile && f.lastModified() < limit) f.delete()
+            else if (f.isDirectory && f.list()?.isEmpty() == true) f.delete()
+        }
     }
 
     /** UTF-8 でなければ Shift_JIS（Windows-31J）として読み直して UTF-8 にする。変換不要なら null */
@@ -71,17 +115,40 @@ object Subtitles {
                 bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte())
         ) return null
         if (isValidUtf8(bytes)) return null
-        val sjis = runCatching { Charset.forName("windows-31j") }.getOrElse { Charset.forName("Shift_JIS") }
-        return String(bytes, sjis).toByteArray(Charsets.UTF_8)
+        return String(bytes, detectCharset(bytes)).toByteArray(Charsets.UTF_8)
     }
 
-    private fun isValidUtf8(bytes: ByteArray): Boolean = try {
-        Charsets.UTF_8.newDecoder()
+    /**
+     * UTF-8 ではない字幕の文字コードを推測する。
+     * 日本語（Shift_JIS・EUC-JP）を優先し、それ以外は ICU の判定（欧米の Windows-1252 など）に任せる
+     */
+    private fun detectCharset(bytes: ByteArray): Charset {
+        val sjis = runCatching { Charset.forName("windows-31j") }.getOrElse { Charset.forName("Shift_JIS") }
+        for (cs in listOfNotNull(sjis, runCatching { Charset.forName("EUC-JP") }.getOrNull())) {
+            val text = strictDecode(bytes, cs) ?: continue
+            if (looksJapanese(text)) return cs
+        }
+        val guess = runCatching {
+            CharsetDetector().setText(bytes).detect()?.name?.let { Charset.forName(it) }
+        }.getOrNull()
+        return guess ?: sjis
+    }
+
+    private fun strictDecode(bytes: ByteArray, cs: Charset): String? = try {
+        cs.newDecoder()
             .onMalformedInput(CodingErrorAction.REPORT)
             .onUnmappableCharacter(CodingErrorAction.REPORT)
             .decode(ByteBuffer.wrap(bytes))
-        true
+            .toString()
     } catch (_: CharacterCodingException) {
-        false
+        null
     }
+
+    /** ひらがな・カタカナが一定以上含まれていれば日本語とみなす */
+    private fun looksJapanese(text: String): Boolean {
+        val kana = text.count { it in '\u3040'..'\u30FF' }
+        return kana >= 10 || (text.isNotEmpty() && kana * 50 >= text.length)
+    }
+
+    private fun isValidUtf8(bytes: ByteArray): Boolean = strictDecode(bytes, Charsets.UTF_8) != null
 }

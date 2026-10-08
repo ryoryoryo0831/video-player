@@ -115,12 +115,11 @@ class PlaybackService : Service() {
     /** 今の曲・動画が終わったら止める */
     var sleepAtEnd = false
         private set
-    /** 動画画面が裏に回ったときなど、止めて位置だけ覚えている状態 */
-    var parkedAt: Long? = null
-        private set
-    /** 動画を裏で音声だけ再生している（映像を止めている）状態 */
+    /** 動画を裏で音声だけ再生している・一時停止している（映像を止めている）状態 */
     var videoTrackDisabled = false
         private set
+    /** 画面が無い間に始まった動画（:no-video で開いたので、映像を戻すには開き直しが必要） */
+    private var startedWithoutVideo = false
     /** 動画の画面が表示されているか（表示されていない間に始まる動画は音声だけ再生する） */
     var videoUiAttached = false
 
@@ -135,8 +134,15 @@ class PlaybackService : Service() {
     /** 「字幕ファイルを追加」で読み込んだ字幕（動画ごと） */
     private val addedSubtitles = mutableMapOf<String, MutableList<File>>()
     private var foreground = false
+    /** 通知を出しているか（一時停止中は通知だけ残してサービスの常駐をやめる） */
+    private var notificationShown = false
     private var pausedByFocus = false
     private var hasFocus = false
+    /** 今の曲・動画で再生エラーが起きて、次へ進む処理を済ませた */
+    private var errorHandled = false
+    /** 続けて再生できなかった数（全部だめなときに延々と次へ進まないように） */
+    private var errorStreak = 0
+    private var wifiLock: WifiManager.WifiLock? = null
 
     val currentItem: PlaylistItem? get() = items.getOrNull(index)
     val isPlaying: Boolean get() = player.isPlaying
@@ -177,6 +183,8 @@ class PlaybackService : Service() {
             ACTION_NEXT -> next()
             ACTION_PREVIOUS -> previous()
             ACTION_STOP -> stopPlayback()
+            // 一時停止中の通知をスワイプで消した：画面で見ていなければ終了する
+            ACTION_DISMISS -> if (!videoUiAttached && !player.isPlaying) stopPlayback()
         }
         return START_NOT_STICKY
     }
@@ -196,6 +204,7 @@ class PlaybackService : Service() {
         scope.cancel()
         runCatching { unregisterReceiver(noisyReceiver) }
         abandonFocus()
+        releaseWifiLock()
         session.release()
         player.setEventListener(null)
         player.release()
@@ -268,8 +277,8 @@ class PlaybackService : Service() {
     fun load(newItems: List<PlaylistItem>, startIndex: Int, shuffled: Boolean) {
         if (startIndex !in newItems.indices) return
         savePosition()
-        parkedAt = null
         sleepAtEnd = false
+        errorStreak = 0
         items = newItems
         index = startIndex
         shuffle = shuffled
@@ -278,6 +287,8 @@ class PlaybackService : Service() {
         // 画面から切り離されても動き続けるように「開始済み」のサービスにしておく
         startService(Intent(this, PlaybackService::class.java))
         playCurrent(startPositionOf(newItems[startIndex]), false)
+        // 画面が表示されている今のうちに常駐を始める（再生開始を待つと、その前に画面を離れた場合に始められない）
+        startForegroundIfNeeded()
         dispatch { it.onModesChanged() }
     }
 
@@ -287,6 +298,8 @@ class PlaybackService : Service() {
         lengthMs = 0
         meta = null
         videoTrackDisabled = false
+        startedWithoutVideo = false
+        errorHandled = false
         abA = -1
         abB = -1
 
@@ -305,7 +318,7 @@ class PlaybackService : Service() {
                 }
             }
         } catch (_: Exception) {
-            Toast.makeText(this, "ファイルを開けませんでした：${item.title}", Toast.LENGTH_LONG).show()
+            onPlaybackError("ファイルを開けませんでした：${item.title}")
             return
         }
         media.setHWDecoderEnabled(AppSettings.hwDecoding(this), false)
@@ -314,6 +327,7 @@ class PlaybackService : Service() {
         if (!item.isAudio && !videoUiAttached && renderer == null) {
             media.addOption(":no-video")
             videoTrackDisabled = true
+            startedWithoutVideo = true
         }
         player.setMedia(media)
         media.release()
@@ -336,8 +350,7 @@ class PlaybackService : Service() {
     }
 
     fun play() {
-        if (parkedAt != null) resumeParked(paused = false)
-        else if (currentItem != null) player.play()
+        if (currentItem != null) player.play()
     }
 
     fun pause() {
@@ -350,7 +363,7 @@ class PlaybackService : Service() {
         updateSession()
     }
 
-    fun seekBy(deltaMs: Long) = seekTo(player.time + deltaMs)
+    fun seekBy(deltaMs: Long) = seekTo(player.time.coerceAtLeast(0) + deltaMs)
 
     fun setPlaybackRate(r: Float) {
         rate = r
@@ -358,20 +371,33 @@ class PlaybackService : Service() {
         updateSession()
     }
 
-    /** 動画画面が裏に回ったとき：止めて位置を覚えておく */
+    /**
+     * 動画画面が裏に回ったとき：一時停止して映像を止めておく。
+     * 読み込んだままにしておくので、戻ってきたときに選んだ字幕・音声トラックやずれの調整がそのまま残る
+     */
     fun park() {
-        if (currentItem == null || parkedAt != null) return
-        parkedAt = player.time.coerceAtLeast(0)
+        if (currentItem == null) return
+        // 電話などで一時停止していた場合も、画面を離れたら勝手に再開しない
+        pausedByFocus = false
+        if (player.isPlaying) player.pause()
         savePosition()
-        player.stop()
+        setVideoEnabled(false)
         updateSession()
     }
 
-    /** park() した位置から再開する */
-    fun resumeParked(paused: Boolean) {
-        val t = parkedAt ?: return
-        parkedAt = null
-        playCurrent(t, paused)
+    /** 動画の画面に戻ってきたとき：止めていた映像を戻す */
+    fun restoreVideo() {
+        if (currentItem == null || currentItem?.isAudio == true) return
+        if (startedWithoutVideo) {
+            // 映像なしで開いた動画は、同じ位置から開き直して映像を出す
+            val t = player.time.coerceAtLeast(0)
+            playCurrent(t, paused = !player.isPlaying)
+            return
+        }
+        if (!videoTrackDisabled) return
+        setVideoEnabled(true)
+        // 一時停止中でも今の場面が表示されるように、同じ位置へ移動し直す
+        if (!player.isPlaying) player.setTime(player.time.coerceAtLeast(0))
     }
 
     /** 再生を終了して通知も消す */
@@ -386,15 +412,17 @@ class PlaybackService : Service() {
         items = emptyList()
         order = emptyList()
         index = 0
-        parkedAt = null
         lengthMs = 0
         meta = null
         cancelSleepTimer()
         abandonFocus()
+        releaseWifiLock()
         handler.removeCallbacks(saveTask)
         session.isActive = false
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        NotificationManagerCompat.from(this).cancel(NOTIFICATION_ID)
         foreground = false
+        notificationShown = false
         dispatch { it.onPlaybackStopped() }
         stopSelf()
     }
@@ -409,7 +437,6 @@ class PlaybackService : Service() {
     fun playAt(pos: Int) {
         if (pos !in order.indices) return
         savePosition()
-        parkedAt = null
         orderPos = pos
         index = order[pos]
         playCurrent(startPositionOf(items[index]), false)
@@ -479,6 +506,8 @@ class PlaybackService : Service() {
     }
 
     private fun onEnded() {
+        // 再生エラーで次へ進む処理を済ませている
+        if (errorHandled) return
         if (expandSubItems()) return
         currentItem?.let { resume.clear(it.key) }
         if (sleepAtEnd) {
@@ -555,13 +584,12 @@ class PlaybackService : Service() {
     fun castTo(item: RendererItem?) {
         if (item == renderer) return
         val active = currentItem != null
-        val position = (parkedAt ?: player.time).coerceAtLeast(0)
+        val position = player.time.coerceAtLeast(0)
         savePosition()
         renderer?.release()
         renderer = item?.also { it.retain() }
         player.setRenderer(item)
         if (active) {
-            parkedAt = null
             playCurrent(position, false)
         }
         dispatch { it.onModesChanged() }
@@ -678,21 +706,31 @@ class PlaybackService : Service() {
     private fun onPlayerEvent(e: MediaPlayer.Event) {
         when (e.type) {
             MediaPlayer.Event.Playing -> {
+                if (!requestFocus()) {
+                    // 通話中など、ほかのアプリが音を使っていて譲ってもらえなかった
+                    player.pause()
+                    Toast.makeText(this, "ほかのアプリが音声を使用中のため、再生できません", Toast.LENGTH_SHORT).show()
+                    return
+                }
+                errorStreak = 0
                 if (player.rate != rate) player.rate = rate
                 if (player.volume != volume) player.setVolume(volume)
-                requestFocus()
                 handler.removeCallbacks(saveTask)
                 handler.post(saveTask)
+                if (currentItem?.isNetwork == true) acquireWifiLock()
                 updateSession()
                 startForegroundIfNeeded()
             }
             MediaPlayer.Event.Paused -> {
                 handler.removeCallbacks(saveTask)
                 savePosition()
+                releaseWifiLock()
                 updateSession()
+                stopForegroundKeepNotification()
             }
             MediaPlayer.Event.Stopped -> {
                 handler.removeCallbacks(saveTask)
+                releaseWifiLock()
                 updateSession()
             }
             MediaPlayer.Event.LengthChanged -> setLength(e.lengthChanged)
@@ -707,10 +745,24 @@ class PlaybackService : Service() {
                 onEnded()
                 return
             }
-            MediaPlayer.Event.EncounteredError ->
-                Toast.makeText(this, "再生できませんでした：${currentItem?.title.orEmpty()}", Toast.LENGTH_LONG).show()
+            MediaPlayer.Event.EncounteredError -> {
+                dispatch { it.onPlayerEvent(e) }
+                onPlaybackError("再生できませんでした：${currentItem?.title.orEmpty()}")
+                return
+            }
         }
         dispatch { it.onPlayerEvent(e) }
+    }
+
+    /** 開けない・再生できないファイルは飛ばして次へ進む（次が無い、または全部だめなら終了） */
+    private fun onPlaybackError(message: String) {
+        if (errorHandled) return
+        errorHandled = true
+        errorStreak++
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        handler.post {
+            if (hasNext() && errorStreak < items.size) next() else stopPlayback()
+        }
     }
 
     private fun setLength(ms: Long) {
@@ -726,7 +778,6 @@ class PlaybackService : Service() {
         if (AppSettings.resume(this)) resume.get(item.key) else 0L
 
     fun savePosition() {
-        if (parkedAt != null) return
         val item = currentItem ?: return
         val len = if (lengthMs > 0) lengthMs else player.length
         val t = player.time
@@ -821,27 +872,53 @@ class PlaybackService : Service() {
                         hasFocus = false
                         pause()
                     }
-                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> if (player.isPlaying) {
-                        pausedByFocus = true
-                        pause()
+                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                        // 通話中にうっかり再生しても、もう一度フォーカスを求めて断られるようにする
+                        hasFocus = false
+                        if (player.isPlaying) {
+                            pausedByFocus = true
+                            pause()
+                        }
                     }
-                    AudioManager.AUDIOFOCUS_GAIN -> if (pausedByFocus) {
-                        pausedByFocus = false
-                        play()
+                    AudioManager.AUDIOFOCUS_GAIN -> {
+                        hasFocus = true
+                        if (pausedByFocus) {
+                            pausedByFocus = false
+                            play()
+                        }
                     }
                 }
             }
             .build()
     }
 
-    private fun requestFocus() {
-        if (hasFocus) return
-        hasFocus = audioManager.requestAudioFocus(focusRequest) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+    /** 音声フォーカスを求める。もらえなかったら false */
+    private fun requestFocus(): Boolean {
+        if (!hasFocus) {
+            hasFocus = audioManager.requestAudioFocus(focusRequest) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        }
+        return hasFocus
     }
 
     private fun abandonFocus() {
         audioManager.abandonAudioFocusRequest(focusRequest)
         hasFocus = false
+    }
+
+    // ---------- Wi-Fi（画面が消えていてもネットワーク再生が途切れないように） ----------
+
+    private fun acquireWifiLock() {
+        val lock = wifiLock ?: runCatching {
+            @Suppress("DEPRECATION")
+            applicationContext.getSystemService(WifiManager::class.java)
+                .createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "VideoPlayerStream")
+                .apply { setReferenceCounted(false) }
+        }.getOrNull()?.also { wifiLock = it } ?: return
+        runCatching { if (!lock.isHeld) lock.acquire() }
+    }
+
+    private fun releaseWifiLock() {
+        runCatching { wifiLock?.takeIf { it.isHeld }?.release() }
     }
 
     /** イヤホンが抜けたら一時停止 */
@@ -865,7 +942,7 @@ class PlaybackService : Service() {
             )
             .setState(
                 if (playing) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED,
-                (parkedAt ?: player.time).coerceAtLeast(0),
+                player.time.coerceAtLeast(0),
                 if (playing) rate else 0f,
             )
             .build()
@@ -880,7 +957,7 @@ class PlaybackService : Service() {
                 .build()
         )
         session.isActive = true
-        if (foreground) notifyNotification()
+        if (notificationShown) notifyNotification()
     }
 
     private fun startForegroundIfNeeded() {
@@ -894,14 +971,26 @@ class PlaybackService : Service() {
                 if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK else 0,
             )
             foreground = true
+            notificationShown = true
         } catch (_: Exception) {
-            // バックグラウンドからの開始が制限された場合など。再生自体は続ける
+            // バックグラウンドからの開始が制限された場合など。通知だけ更新して再生は続ける
+            notifyNotification()
         }
     }
 
+    /** 一時停止したら常駐をやめる。通知は残すが、スワイプで消せるようになる */
+    private fun stopForegroundKeepNotification() {
+        if (!foreground) return
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH)
+        foreground = false
+        notifyNotification()
+    }
+
     private fun notifyNotification() {
+        if (currentItem == null) return
         try {
             NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, buildNotification())
+            notificationShown = true
         } catch (_: SecurityException) {
         }
     }
@@ -938,7 +1027,9 @@ class PlaybackService : Service() {
             .setContentText(displaySubtitle())
             .setLargeIcon(meta?.art)
             .setContentIntent(open)
-            .setOngoing(true)
+            .setDeleteIntent(serviceIntent(ACTION_DISMISS, 5))
+            // 再生中だけ消せないようにする（一時停止中はスワイプで消すと終了）
+            .setOngoing(playing)
             .setSilent(true)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .addAction(R.drawable.ic_skip_previous, "前へ", serviceIntent(ACTION_PREVIOUS, 1))
@@ -965,5 +1056,6 @@ class PlaybackService : Service() {
         private const val ACTION_NEXT = "com.ryose.videoplayer.NEXT"
         private const val ACTION_PREVIOUS = "com.ryose.videoplayer.PREVIOUS"
         private const val ACTION_STOP = "com.ryose.videoplayer.STOP"
+        private const val ACTION_DISMISS = "com.ryose.videoplayer.DISMISS"
     }
 }
