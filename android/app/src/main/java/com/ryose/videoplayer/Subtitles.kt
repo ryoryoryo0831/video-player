@@ -22,6 +22,17 @@ object Subtitles {
     /** キャッシュに作った字幕を消すまでの日数 */
     private const val CACHE_DAYS = 14
 
+    /** 手で選べる文字コード（表示名 → 文字コード名） */
+    val CHARSETS = listOf(
+        "UTF-8" to "UTF-8",
+        "Shift_JIS（日本語）" to "windows-31j",
+        "EUC-JP（日本語）" to "EUC-JP",
+        "GB18030（中国語・簡体字）" to "GB18030",
+        "Big5（中国語・繁体字）" to "Big5",
+        "EUC-KR（韓国語）" to "EUC-KR",
+        "Windows-1252（英語・欧米の言語）" to "windows-1252",
+    )
+
     fun isSubtitleName(name: String) = name.substringAfterLast('.', "").lowercase() in ALL_EXT
 
     /** 上限までしか読まない。上限を超えるファイルなら null */
@@ -66,11 +77,16 @@ object Subtitles {
         }
     }
 
-    /** VLC に渡せる字幕ファイルを返す。文字コードの変換が必要ならキャッシュに UTF-8 版を作る */
-    fun prepare(context: Context, file: File): File {
+    /**
+     * VLC に渡せる字幕ファイルを返す。文字コードの変換が必要ならキャッシュに UTF-8 版を作る。
+     * [charset] を指定したら（文字化けしたので手で選んだときは）、推測せずにその文字コードとして読む
+     */
+    fun prepare(context: Context, file: File, charset: String? = null): File {
         if (file.extension.lowercase() !in TEXT_EXT || file.length() > MAX_TEXT_SIZE) return file
         return try {
-            val converted = toUtf8IfNeeded(file.readBytes()) ?: return file
+            val bytes = file.readBytes()
+            val converted = if (charset != null) String(bytes, Charset.forName(charset)).toByteArray(Charsets.UTF_8)
+            else toUtf8IfNeeded(bytes) ?: return file
             writeCache(context, file.path, file.name, converted)
         } catch (_: Exception) {
             file

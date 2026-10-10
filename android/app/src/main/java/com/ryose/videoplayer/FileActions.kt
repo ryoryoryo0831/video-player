@@ -133,6 +133,10 @@ object FileActions {
                     if (!newSub.exists() && sub.renameTo(newSub)) changed += listOf(sub.path, newSub.path)
                 }
                 ResumeStore(context).migrate(file.path, target.path)
+                // プレイリスト・お気に入り・履歴も新しい名前に合わせる（古い名前のままだと開けなくなる）
+                val renamed = PlaylistItem.fromFile(target)
+                PlaylistStore(context).replaceEverywhere(item.key, renamed)
+                HistoryStore(context).replace(item.key, renamed)
                 MediaScannerConnection.scanFile(context.applicationContext, changed.toTypedArray(), null, null)
                 onDone()
             }
@@ -167,9 +171,10 @@ object FileActions {
         }
     }
 
-    /** 削除したファイルの履歴・再生位置を消す */
+    /** 削除したファイルの履歴・再生位置・プレイリスト（お気に入りも）の記録を消す */
     fun forget(context: Context, item: PlaylistItem) {
         ResumeStore(context).clear(item.key)
         HistoryStore(context).remove(item.key)
+        PlaylistStore(context).replaceEverywhere(item.key, null)
     }
 }

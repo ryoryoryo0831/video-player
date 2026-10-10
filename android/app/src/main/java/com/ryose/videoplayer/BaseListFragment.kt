@@ -95,11 +95,11 @@ abstract class BaseListFragment : Fragment(R.layout.fragment_list) {
     protected open fun onRowClick(position: Int) {}
 
     /** 一覧に並んでいる動画をまとめてプレイリストにして、指定の行から再生する */
-    protected fun playMediaAt(position: Int) {
+    protected fun playMediaAt(position: Int, advance: Boolean = true) {
         val rows = adapter.rows
         val target = rows.getOrNull(position) as? Row.Media ?: return
         val media = rows.filterIsInstance<Row.Media>()
-        requireActivity().playItems(media.map { it.item }, media.indexOf(target))
+        requireActivity().playItems(media.map { it.item }, media.indexOf(target), advance = advance)
     }
 
     /** ファイルの名前を変えた・消したあとに一覧を読み込み直す（画面ごとに上書き） */

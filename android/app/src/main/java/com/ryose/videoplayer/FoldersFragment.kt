@@ -53,6 +53,8 @@ class FoldersFragment : BaseListFragment() {
 
     /** たどってきた場所（空ならトップ） */
     private val stack = ArrayList<Loc>()
+    /** 読み込み終わったネットワークのフォルダの中身（場所ごと）。戻ってきたときに待たずに表示する */
+    private val netCache = mutableMapOf<String, List<Row>>()
     private val current get() = stack.lastOrNull()
     @Volatile
     private var roots: List<MediaFiles.Root> = emptyList()
@@ -121,7 +123,9 @@ class FoldersFragment : BaseListFragment() {
     override fun onResume() {
         super.onResume()
         svc?.let { it.setDialogCallbacks(dialogHandler) }
-        load()
+        // 再生から戻ってきたときなどは、スクロール位置を保ったまま読み込み直す
+        // （ネットワークのフォルダは覚えておいた中身を出すので、待たされない）
+        load(list.layoutManager?.onSaveInstanceState())
     }
 
     override fun onPause() {
@@ -254,6 +258,10 @@ class FoldersFragment : BaseListFragment() {
                 if (!isLast) {
                     setBackgroundResource(android.R.drawable.list_selector_background)
                     setOnClickListener { popTo(level) }
+                } else if (current is Loc.Net) {
+                    // 今いるネットワークのフォルダの名前をタップすると、読み込み直す
+                    setBackgroundResource(android.R.drawable.list_selector_background)
+                    setOnClickListener { reloadNet() }
                 }
             }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.MATCH_PARENT))
         }
@@ -282,8 +290,14 @@ class FoldersFragment : BaseListFragment() {
         when (val loc = current) {
             null -> loadTop(restoreScroll)
             is Loc.Local -> loadLocal(loc.dir, restoreScroll)
-            is Loc.Net -> loadNet(loc)
+            is Loc.Net -> loadNet(loc, restoreScroll)
         }
+    }
+
+    private fun reloadNet() {
+        val loc = current as? Loc.Net ?: return
+        netCache.remove(loc.key)
+        load()
     }
 
     /** トップ：ストレージ・登録したサーバー・見つかったサーバー */
@@ -395,7 +409,12 @@ class FoldersFragment : BaseListFragment() {
     }
 
     /** ネットワーク上のフォルダの中身を読み込む */
-    private fun loadNet(loc: Loc.Net) {
+    private fun loadNet(loc: Loc.Net, restoreScroll: Parcelable? = null) {
+        netCache[loc.key]?.let { cached ->
+            showNetRows(cached)
+            restoreScroll?.let { list.layoutManager?.onRestoreInstanceState(it) }
+            return
+        }
         val s = svc
         if (s == null) {
             // サービスにつながったら onConnected から読み込み直す
@@ -446,8 +465,14 @@ class FoldersFragment : BaseListFragment() {
         val sorted = netRows.filterIsInstance<Row.Folder>().sortedWith(compareBy(NaturalOrder) { it.name }) +
             netRows.filterIsInstance<Row.Media>().sortedWith(compareBy(NaturalOrder) { it.item.title })
         if (sorted.isEmpty() && !finished) return
-        showRows(sorted, "何も見つかりませんでした。\n\n空のフォルダか、接続できなかった可能性があります。", R.drawable.ic_lan)
+        showNetRows(sorted)
         loading.visibility = if (finished) View.GONE else View.VISIBLE
+        // 最後まで読めた中身は覚えておく（空のときは接続の失敗かもしれないので覚えない）
+        if (finished && sorted.isNotEmpty()) current?.let { netCache[it.key] = sorted }
+    }
+
+    private fun showNetRows(rows: List<Row>) {
+        showRows(rows, "何も見つかりませんでした。\n\n空のフォルダか、接続できなかった可能性があります。", R.drawable.ic_lan)
     }
 
     private fun stopBrowser() {

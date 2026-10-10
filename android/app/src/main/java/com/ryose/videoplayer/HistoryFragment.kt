@@ -49,7 +49,8 @@ class HistoryFragment : BaseListFragment() {
         viewLifecycleOwner.lifecycleScope.launch {
             val rows = withContext(Dispatchers.IO) {
                 val now = System.currentTimeMillis()
-                history.all().map { e ->
+                // 以前のバージョンで記録された音楽は出さない
+                history.all().filterNot { it.item.isAudio }.map { e ->
                     val ago = DateUtils.getRelativeTimeSpanString(e.playedAt, now, DateUtils.MINUTE_IN_MILLIS)
                     val folder = e.item.path?.let { File(it).parentFile?.name }
                     Row.Media(e.item, listOfNotNull(ago.toString(), folder).joinToString(" · "))

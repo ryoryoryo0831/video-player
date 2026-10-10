@@ -101,6 +101,9 @@ class PlaybackService : Service() {
         private set
     var shuffle = false
         private set
+    /** 動画が終わったら次の動画へ進むか（「動画」タブの一覧から再生したときは設定しだい） */
+    var autoAdvance = true
+        private set
     var repeat = Repeat.OFF
         private set
     var lengthMs = 0L
@@ -288,7 +291,13 @@ class PlaybackService : Service() {
      * 新しく再生を始める直前、動画の画面につなぐ前に呼ぶ。
      */
     fun ensureEngineUpToDate() {
-        if (videoUiAttached || AppSettings.vlcOptions(this) == engineOptions) return
+        if (videoUiAttached || !engineOutdated()) return
+        rebuildEngine()
+    }
+
+    fun engineOutdated() = AppSettings.vlcOptions(this) != engineOptions
+
+    private fun rebuildEngine() {
         savePosition()
         stopRendererDiscovery()
         renderer?.release()
@@ -298,6 +307,26 @@ class PlaybackService : Service() {
         player.release()
         libVLC.release()
         createEngine()
+    }
+
+    /** エンジンを作り直したあとに、同じ動画を同じ位置から開き直すための記録（位置・再生中だったか） */
+    private var pendingReplay: Pair<Long, Boolean>? = null
+
+    /**
+     * 再生中の動画はそのままに、設定（字幕の見た目など）が変わっていたらエンジンを作り直す。
+     * 動画の画面につなぐ前に呼び、つないだあとで [replayAfterEngineChange] を呼ぶ。作り直したら true
+     */
+    fun recreateEngineKeepingItem(): Boolean {
+        if (currentItem == null || videoUiAttached || !engineOutdated()) return false
+        pendingReplay = player.time.coerceAtLeast(0) to player.isPlaying
+        rebuildEngine()
+        return true
+    }
+
+    fun replayAfterEngineChange() {
+        val (t, playing) = pendingReplay ?: return
+        pendingReplay = null
+        playCurrent(t, paused = !playing)
     }
 
     /** VLC からの質問（ログイン・証明書の確認など）を表示する画面を登録する */
@@ -321,9 +350,13 @@ class PlaybackService : Service() {
     // ---------- 読み込みと再生 ----------
 
     /** 新しいプレイリストで再生を始める（[paused] なら一時停止した状態で用意だけする） */
-    fun load(newItems: List<PlaylistItem>, startIndex: Int, shuffled: Boolean, paused: Boolean = false) {
+    fun load(
+        newItems: List<PlaylistItem>, startIndex: Int, shuffled: Boolean,
+        paused: Boolean = false, advance: Boolean = true,
+    ) {
         if (startIndex !in newItems.indices) return
         savePosition()
+        autoAdvance = advance
         sleepAtEnd = false
         errorStreak = 0
         items = newItems
@@ -384,7 +417,11 @@ class PlaybackService : Service() {
             return
         }
         media.setHWDecoderEnabled(hwDecodingFor(item), false)
-        if (item.isNetwork) media.addOption(":network-caching=${AppSettings.networkCachingMs(this)}")
+        if (item.isNetwork) {
+            media.addOption(":network-caching=${AppSettings.networkCachingMs(this)}")
+            // NAS などでは隣の字幕ファイルをアプリが探せないので、VLC に探してもらう
+            if (!item.isAudio) media.addOption(":sub-autodetect-file")
+        }
         if (startMs > 0) media.addOption(":start-time=${startMs / 1000.0}")
         if (paused) media.addOption(":start-paused")
         if (!item.isAudio && !videoUiAttached && renderer == null) {
@@ -396,7 +433,8 @@ class PlaybackService : Service() {
         media.release()
         player.play()
 
-        scope.launch(Dispatchers.IO) { history.add(item) }
+        // 履歴は動画だけ（音楽を聴くと動画の履歴が押し出されてしまうので）
+        if (!item.isAudio) scope.launch(Dispatchers.IO) { history.add(item) }
         LastSession.save(this, items, index, shuffle)
         loadSubtitles(item)
         loadMeta(item)
@@ -513,8 +551,10 @@ class PlaybackService : Service() {
         when {
             orderPos < order.lastIndex -> playAt(orderPos + 1)
             repeat == Repeat.ALL && items.isNotEmpty() -> {
-                // 最後まで来たら最初から（シャッフル中は並べ直す）
-                if (shuffle) order = items.indices.shuffled()
+                // 最後まで来たら最初から（シャッフル中は並べ直す。今の曲がまた最初に来て 2 回続かないように）
+                if (shuffle) order = items.indices.shuffled().let { o ->
+                    if (o.size > 1 && o.first() == index) o.drop(1) + o.first() else o
+                }
                 playAt(0)
             }
         }
@@ -582,9 +622,10 @@ class PlaybackService : Service() {
             stopPlayback()
             return
         }
+        val item = currentItem
         when {
             repeat == Repeat.ONE -> playCurrent(0, false)
-            hasNext() -> next()
+            hasNext() && (autoAdvance || item?.isAudio == true) -> next()
             else -> stopPlayback()
         }
     }
@@ -874,13 +915,26 @@ class PlaybackService : Service() {
 
     // ---------- 字幕 ----------
 
+    /** 字幕の文字コードを手で選んだもの（動画ごと。アプリを閉じるまで覚えておく） */
+    private val subtitleCharsets = mutableMapOf<String, String>()
+
+    fun subtitleCharset(): String? = currentItem?.let { subtitleCharsets[it.key] }
+
+    /** 隣の字幕ファイルの文字コードを選び直す（null で自動）。同じ位置から開き直して字幕を読み直す */
+    fun setSubtitleCharset(name: String?) {
+        val item = currentItem ?: return
+        if (name == null) subtitleCharsets.remove(item.key) else subtitleCharsets[item.key] = name
+        playCurrent(player.time.coerceAtLeast(0), paused = !player.isPlaying)
+    }
+
     private fun loadSubtitles(item: PlaylistItem) {
         if (item.isAudio) return
         val manual = addedSubtitles[item.key].orEmpty().toList()
         val path = item.path
+        val charset = subtitleCharsets[item.key]
         scope.launch {
             val auto = if (path == null) emptyList() else withContext(Dispatchers.IO) {
-                Subtitles.findFor(path).map { Subtitles.prepare(this@PlaybackService, it) }
+                Subtitles.findFor(path).map { Subtitles.prepare(this@PlaybackService, it, charset) }
             }
             if (currentItem != item) return@launch
             (manual + auto).forEachIndexed { i, f ->

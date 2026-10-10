@@ -3,10 +3,12 @@
     <!-- 再生画面の向き -->
     <string-array name="player_orientation_labels">
         <item>自動回転（スマホの向きに合わせる）</item>
+        <item>自動回転（スマホの回転ロックに従う）</item>
         <item>動画に合わせる（横長の動画は横向き）</item>
     </string-array>
     <string-array name="player_orientation_values">
         <item>auto</item>
+        <item>user</item>
         <item>video</item>
     </string-array>
 

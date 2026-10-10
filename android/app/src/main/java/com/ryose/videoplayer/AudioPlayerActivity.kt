@@ -180,6 +180,8 @@ class AudioPlayerActivity : AppCompatActivity() {
             pendingLoad = null
             s.load(items, index, shuffle)
         }
+        // 再生サービスが OS に止められていたら（アプリが裏で終了させられたあとなど）、前回の曲を一時停止のまま用意し直す
+        if (s.currentItem == null) s.restoreLastSession(play = false, audioOnly = true)
         if (s.currentItem == null) {
             finish()
             return

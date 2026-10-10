@@ -11,7 +11,7 @@ import java.io.File
 /** スクリーンショットを「写真」アプリから見える場所に保存する */
 object Screenshots {
 
-    private const val FOLDER = "VideoPlayer"
+    private const val FOLDER = "Orbit"
 
     /** 保存した場所（表示用）を返す。失敗したら null */
     fun save(context: Context, bitmap: Bitmap, baseName: String): String? = try {

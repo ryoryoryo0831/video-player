@@ -74,15 +74,21 @@ data class PlaylistItem(
 object Playlist {
     var items: List<PlaylistItem> = emptyList()
     var shuffle = false
+    /** 動画が終わったら次の動画へ進むか */
+    var autoAdvance = true
 
     private fun file(context: Context) = File(context.applicationContext.filesDir, "queue.json")
 
-    fun set(context: Context, list: List<PlaylistItem>, shuffled: Boolean) {
+    fun set(context: Context, list: List<PlaylistItem>, shuffled: Boolean, advance: Boolean = true) {
         items = list
         shuffle = shuffled
+        autoAdvance = advance
         val arr = org.json.JSONArray()
         list.forEach { arr.put(it.toJson()) }
-        FileSaver.save(file(context), JSONObject().put("shuffle", shuffled).put("items", arr).toString())
+        FileSaver.save(
+            file(context),
+            JSONObject().put("shuffle", shuffled).put("advance", advance).put("items", arr).toString(),
+        )
     }
 
     /** メモリから消えていたら（アプリが一度終了していたら）ファイルから読み直す */
@@ -93,14 +99,15 @@ object Playlist {
             val arr = o.getJSONArray("items")
             items = (0 until arr.length()).map { PlaylistItem.fromJson(arr.getJSONObject(it)) }
             shuffle = o.optBoolean("shuffle")
+            autoAdvance = o.optBoolean("advance", true)
         }
     }
 }
 
 /** 再生画面を開いて再生を始める（音楽なら音楽の画面、動画なら動画の画面） */
-fun Activity.playItems(items: List<PlaylistItem>, index: Int, shuffle: Boolean = false) {
+fun Activity.playItems(items: List<PlaylistItem>, index: Int, shuffle: Boolean = false, advance: Boolean = true) {
     if (index !in items.indices) return
-    Playlist.set(this, items, shuffle)
+    Playlist.set(this, items, shuffle, advance)
     val cls = if (items[index].isAudio) AudioPlayerActivity::class.java else PlayerActivity::class.java
     startActivity(
         Intent(this, cls)

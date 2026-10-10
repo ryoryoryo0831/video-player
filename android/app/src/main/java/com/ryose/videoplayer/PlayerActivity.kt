@@ -312,6 +312,8 @@ class PlayerActivity : AppCompatActivity() {
         // 自由な小窓で再生していたら、この画面に戻す
         s.closePopup()
         if (pendingLoad != null) s.ensureEngineUpToDate()
+        // 「︙ → 設定」で字幕の見た目などを変えて戻ってきたら、今の動画にもすぐ反映する
+        val engineRebuilt = pendingLoad == null && s.currentItem?.isAudio == false && s.recreateEngineKeepingItem()
         s.player.attachViews(videoLayout, null, true, false)
         s.videoUiAttached = true
         // 裏に回っている間に再生サービスが OS に止められていたら、前回の動画を一時停止のまま用意し直す
@@ -322,6 +324,7 @@ class PlayerActivity : AppCompatActivity() {
                 finish()
                 return
             }
+            engineRebuilt -> s.replayAfterEngineChange()
             // 裏に回っていた動画に戻ってきたとき（読み込んだままなので、字幕などの選択はそのまま）
             else -> s.restoreVideo()
         }
@@ -332,7 +335,8 @@ class PlayerActivity : AppCompatActivity() {
     private fun startPendingLoad(s: PlaybackService) {
         val (items, index, shuffle) = pendingLoad ?: return
         pendingLoad = null
-        s.load(items, index, shuffle)
+        // 一覧から渡されたリストなら、終わったら次へ進むかどうかも一覧の指定に従う
+        s.load(items, index, shuffle, advance = items !== Playlist.items || Playlist.autoAdvance)
         val start = if (AppSettings.resume(this)) ResumeStore(this).get(items[index].key) else 0L
         if (start > 0) {
             showInfo("続きから再生  ${formatTime(start)}")
@@ -370,9 +374,10 @@ class PlayerActivity : AppCompatActivity() {
         val s = svc
         if (s != null) {
             when {
+                // キャスト中はテレビで再生を続ける（戻るボタンで閉じても止めない）
+                s.renderer != null -> {}
                 // 戻るボタンで閉じた
                 isFinishing -> s.stopPlayback()
-                s.renderer != null -> {}
                 // 小窓（PiP）のまま画面が消えた：音声だけ続ける（小窓を閉じた場合は onPictureInPictureModeChanged で終了する）
                 inPip -> if (s.isPlaying) s.setVideoEnabled(false) else s.park()
                 // 設定が「音声だけ再生」なら映像を止めて音声だけ続ける
@@ -553,8 +558,26 @@ class PlayerActivity : AppCompatActivity() {
             trackItems(tracks, player.spuTrack, R.drawable.ic_subtitles) { player.setSpuTrack(it) } + listOf(
                 SheetItem(R.drawable.ic_add, "字幕ファイルを追加") { pickSubtitle.launch(arrayOf("*/*")) },
                 SheetItem(R.drawable.ic_timer, "タイミング調整", "現在 ${formatDelay(player.spuDelay)}") { showDelayDialog(subtitle = true) },
+            ) + listOfNotNull(
+                // 隣にある字幕ファイルが文字化けしたとき
+                if (svc?.currentItem?.path != null) SheetItem(
+                    R.drawable.ic_edit, "文字化けを直す（文字コード）",
+                    Subtitles.CHARSETS.firstOrNull { it.second == svc?.subtitleCharset() }?.first ?: "自動",
+                ) { showCharsetMenu() } else null,
             ),
         )
+    }
+
+    private fun showCharsetMenu() {
+        val s = svc ?: return
+        val current = s.subtitleCharset()
+        val options: List<Pair<String, String?>> = listOf<Pair<String, String?>>("自動（おすすめ）" to null) + Subtitles.CHARSETS
+        ActionSheet.show(this, "字幕の文字コード", options.map { (label, name) ->
+            SheetItem(if (name == current) R.drawable.ic_check else R.drawable.ic_subtitles, label, active = name == current) {
+                s.setSubtitleCharset(name)
+                showInfo("字幕の文字コード：${label.substringBefore('（')}")
+            }
+        })
     }
 
     private fun showAudioMenu() {
@@ -649,6 +672,8 @@ class PlayerActivity : AppCompatActivity() {
                 if (videoW >= videoH) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                 else ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
             AppSettings.playerOrientation(this) == "video" -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            // 回転ロック中は回さない（寝転んで見るときなど）
+            AppSettings.playerOrientation(this) == "user" -> ActivityInfo.SCREEN_ORIENTATION_FULL_USER
             else -> ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
         }
     }

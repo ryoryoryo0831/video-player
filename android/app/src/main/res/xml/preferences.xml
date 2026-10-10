@@ -42,7 +42,7 @@
         <Preference
             app:iconSpaceReserved="false"
             app:selectable="false"
-            app:summary="SRT などの文字の字幕に反映されます（ASS 字幕は字幕ファイルの指定どおりに表示されます）。次に動画を開いたときから反映されます。" />
+            app:summary="SRT などの文字の字幕に反映されます（ASS 字幕は字幕ファイルの指定どおりに表示されます）。動画の再生画面に戻ったとき・次に動画を開いたときから反映されます。" />
     </PreferenceCategory>
 
     <PreferenceCategory
@@ -62,6 +62,12 @@
             app:key="leave_action"
             app:title="動画の画面を離れたとき"
             app:useSimpleSummaryProvider="true" />
+        <SwitchPreferenceCompat
+            app:defaultValue="false"
+            app:iconSpaceReserved="false"
+            app:key="videos_auto_next"
+            app:summary="オフのときは、「動画」タブから見た動画が終わったらそこで止まります（フォルダ・プレイリストから再生したときは、いつも次へ進みます）"
+            app:title="「動画」タブ：終わったら次の動画を再生" />
         <ListPreference
             app:defaultValue="auto"
             app:entries="@array/player_orientation_labels"

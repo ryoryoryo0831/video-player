@@ -52,6 +52,13 @@ class HistoryStore(context: Context) {
 
     fun remove(key: String) = synchronized(lock) { save(all().filterNot { it.item.key == key }) }
 
+    /** 名前を変えたファイルの記録を、新しい名前に置き換える */
+    fun replace(oldKey: String, newItem: PlaylistItem) = synchronized(lock) {
+        val list = all()
+        if (list.none { it.item.key == oldKey }) return@synchronized
+        save(list.map { if (it.item.key == oldKey) it.copy(item = newItem.copy(durationMs = it.item.durationMs)) else it })
+    }
+
     fun clear() = synchronized(lock) { save(emptyList()) }
 
     private companion object {
@@ -150,6 +157,18 @@ class PlaylistStore(context: Context) {
     }
 
     fun setItems(id: String, items: List<PlaylistItem>) = update(id) { it.copy(items = items) }
+
+    /**
+     * すべてのプレイリスト（お気に入りも）で、名前を変えたファイルを新しい名前に置き換える。
+     * [newItem] が null なら（削除したなら）外す
+     */
+    fun replaceEverywhere(oldKey: String, newItem: PlaylistItem?) = synchronized(lock) {
+        val list = all()
+        if (list.none { p -> p.items.any { it.key == oldKey } }) return@synchronized
+        save(list.map { p ->
+            p.copy(items = p.items.mapNotNull { if (it.key == oldKey) newItem?.copy(durationMs = it.durationMs) else it })
+        })
+    }
 
     private companion object {
         val lock = Any()

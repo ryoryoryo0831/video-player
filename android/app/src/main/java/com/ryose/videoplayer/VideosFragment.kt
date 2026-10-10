@@ -217,7 +217,9 @@ class VideosFragment : BaseListFragment() {
                 openedFolder = dir
                 applyFilter { list.scrollToPosition(0) }
             }
-            is Row.Media -> playMediaAt(position)
+            // 「すべて」の一覧は関係ない動画が並ぶので、終わったら次へ進むかは設定しだい（初期設定は進まない）。
+            // フォルダを開いて再生したときは、いつも次へ進む
+            is Row.Media -> playMediaAt(position, advance = openedFolder != null || AppSettings.videosAutoNext(requireContext()))
             else -> {}
         }
     }
