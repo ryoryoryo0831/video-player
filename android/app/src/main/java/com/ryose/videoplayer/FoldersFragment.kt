@@ -78,8 +78,10 @@ class FoldersFragment : BaseListFragment() {
             stopBrowser()
             showRows(
                 emptyList(),
-                "サーバーから応答がありません。\n\nサーバーの電源やネットワークを確認して、もう一度開いてください。",
+                "サーバーから応答がありません。\n\nサーバーの電源やネットワークを確認して、もう一度お試しください。",
                 R.drawable.ic_lan,
+                actionLabel = "再試行",
+                action = ::reloadNet,
             )
         }
     }
@@ -343,7 +345,11 @@ class FoldersFragment : BaseListFragment() {
         rows += Row.Folder("サーバーを追加", "NAS（SMB）・FTP・SFTP・NFS", R.drawable.ic_add, id = ACTION_ADD_SERVER)
         rows += Row.Folder("URLを開く", "http・https・rtsp などのストリーミング", R.drawable.ic_link, id = ACTION_OPEN_URL)
         if (discovered.isEmpty()) {
-            rows += Row.Folder("同じネットワークの機器を探しています…", "DLNA サーバーや共有フォルダが見つかるとここに出ます", R.drawable.ic_lan)
+            // 押せる項目ではないので、押せない行にして、探している最中だと分かるようにくるくるを出す
+            rows += Row.Folder(
+                "同じネットワークの機器を探しています…", "DLNA サーバーや共有フォルダが見つかるとここに出ます", R.drawable.ic_lan,
+                id = ROW_SEARCHING, busy = true,
+            )
         }
         showRows(rows, "")
     }
@@ -472,7 +478,11 @@ class FoldersFragment : BaseListFragment() {
     }
 
     private fun showNetRows(rows: List<Row>) {
-        showRows(rows, "何も見つかりませんでした。\n\n空のフォルダか、接続できなかった可能性があります。", R.drawable.ic_lan)
+        showRows(
+            rows, "何も見つかりませんでした。\n\n空のフォルダか、接続できなかった可能性があります。", R.drawable.ic_lan,
+            actionLabel = "再試行",
+            action = ::reloadNet,
+        )
     }
 
     private fun stopBrowser() {
@@ -616,6 +626,7 @@ class FoldersFragment : BaseListFragment() {
         const val ACTION_GRANT = "action:grant"
         const val ACTION_ADD_SERVER = "action:add_server"
         const val ACTION_OPEN_URL = "action:open_url"
+        const val ROW_SEARCHING = "info:searching"
         const val NET_TIMEOUT_MS = 20_000L
     }
 }

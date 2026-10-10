@@ -11,6 +11,8 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
 
@@ -72,9 +74,13 @@ data class PlaylistItem(
  * アプリが裏で終了させられても再生画面を復元できるように、ファイルにも書いておく
  */
 object Playlist {
+    // 裏のスレッド（再生画面での読み直し）からも書きかえるので @Volatile
+    @Volatile
     var items: List<PlaylistItem> = emptyList()
+    @Volatile
     var shuffle = false
     /** 動画が終わったら次の動画へ進むか */
+    @Volatile
     var autoAdvance = true
 
     private fun file(context: Context) = File(context.applicationContext.filesDir, "queue.json")
@@ -126,13 +132,30 @@ fun Context.playlistFromIntent(intent: Intent): Triple<List<PlaylistItem>, Int, 
     val data = intent.data ?: return null
     Playlist.restoreIfNeeded(this)
     val list = Playlist.items
-    val extraIndex = intent.getIntExtra(EXTRA_INDEX, -1)
+    val extraIndex = intent.safeIntExtra(EXTRA_INDEX, -1)
     val idx = if (extraIndex in list.indices && list[extraIndex].uri == data) extraIndex
     else list.indexOfFirst { it.uri == data }
     if (idx >= 0) return Triple(list, idx, Playlist.shuffle)
     val single = PlaylistItem(data, queryDisplayName(data) ?: data.lastPathSegment ?: "メディア", resolvePath(data))
     return Triple(listOf(single), 0, false)
 }
+
+/**
+ * [playlistFromIntent] を裏のスレッドで行う。
+ * 他のアプリから開かれた場合は ContentProvider に名前やパスを問い合わせるので、画面を止めないように
+ */
+suspend fun Context.playlistFromIntentAsync(intent: Intent): Triple<List<PlaylistItem>, Int, Boolean>? =
+    withContext(Dispatchers.IO) { playlistFromIntent(intent) }
+
+/**
+ * 他のアプリから渡された Intent の extras は壊れていることがある（読むと BadParcelableException で落ちる）ので、
+ * 読めなければ既定値にする
+ */
+fun Intent.safeBooleanExtra(name: String, default: Boolean = false): Boolean =
+    runCatching { getBooleanExtra(name, default) }.getOrDefault(default)
+
+fun Intent.safeIntExtra(name: String, default: Int): Int =
+    runCatching { getIntExtra(name, default) }.getOrDefault(default)
 
 /** 再生位置の記憶（続きから再生） */
 class ResumeStore(private val context: Context) {

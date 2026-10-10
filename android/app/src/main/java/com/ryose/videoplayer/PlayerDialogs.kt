@@ -135,11 +135,11 @@ object PlayerDialogs {
             val labels = mutableListOf<String>()
             if (svc.renderer != null) {
                 list += null
-                labels += "📱  この端末で再生"
+                labels += mark(false) + "この端末で再生（キャストをやめる）"
             }
             svc.renderers.values.forEach {
                 list += it
-                labels += (if (it == svc.renderer) "✓  " else "📺  ") + (it.displayName ?: it.name)
+                labels += mark(it == svc.renderer) + (it.displayName ?: it.name)
             }
             targets = list
             adapter.clear()

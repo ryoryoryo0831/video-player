@@ -184,5 +184,10 @@
             app:selectable="false"
             app:summary="再生エンジンに libVLC（VideoLAN）を使用しています"
             app:title="再生エンジン" />
+        <Preference
+            app:iconSpaceReserved="false"
+            app:key="licenses"
+            app:summary="このアプリで使用しているソフトウェアのライセンス"
+            app:title="オープンソースライセンス" />
     </PreferenceCategory>
 </PreferenceScreen>

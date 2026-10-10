@@ -7,6 +7,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
+import androidx.core.view.ViewCompat
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.RecyclerView
 import coil.dispose
@@ -26,6 +27,8 @@ sealed class Row {
         val isStorage: Boolean = false,
         /** ジャケット画像を出すときの曲のファイル（アルバム・アーティストの行） */
         val art: String? = null,
+        /** 「探しています…」のような案内の行（押せない・くるくるを出す） */
+        val busy: Boolean = false,
     ) : Row()
 
     /** 動画の行 */
@@ -135,6 +138,7 @@ class MediaAdapter(
         }
         val name: TextView = view.findViewById(R.id.name)
         val info: TextView = view.findViewById(R.id.info)
+        val busy: View = view.findViewById(R.id.busy)
     }
 
     class MediaHolder(view: View) : RecyclerView.ViewHolder(view) {
@@ -148,6 +152,11 @@ class MediaAdapter(
 
     class HeaderHolder(view: View) : RecyclerView.ViewHolder(view) {
         val title: TextView = view.findViewById(R.id.header)
+
+        init {
+            // 読み上げ（TalkBack）で見出しとして扱い、見出しごとに移動できるように
+            ViewCompat.setAccessibilityHeading(title, true)
+        }
     }
 
     override fun getItemViewType(position: Int) = when (data[position]) {
@@ -210,6 +219,14 @@ class MediaAdapter(
                 holder.name.text = row.name
                 holder.info.text = row.info
                 holder.info.visibility = if (row.info.isEmpty()) View.GONE else View.VISIBLE
+                holder.busy.visibility = if (row.busy) View.VISIBLE else View.GONE
+                if (row.busy) {
+                    // 案内の行は押せないようにする（押したときの波紋も出さない）
+                    holder.itemView.setOnClickListener(null)
+                    holder.itemView.setOnLongClickListener(null)
+                    holder.itemView.isClickable = false
+                    holder.itemView.isLongClickable = false
+                }
             }
             is Row.Media -> {
                 holder as MediaHolder
@@ -225,6 +242,8 @@ class MediaAdapter(
                         )
                     }
                 } else row.meta
+                // 読み上げでは記号の「★」ではなく「お気に入り」と読む
+                holder.meta.contentDescription = if (fav) "お気に入り、${row.meta}" else null
                 holder.meta.visibility = if (row.meta.isEmpty() && !fav) View.GONE else View.VISIBLE
                 holder.duration.text = formatTime(item.durationMs)
                 holder.duration.visibility = if (item.durationMs > 0) View.VISIBLE else View.GONE

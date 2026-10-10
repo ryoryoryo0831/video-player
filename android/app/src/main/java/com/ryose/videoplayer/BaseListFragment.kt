@@ -28,6 +28,19 @@ abstract class BaseListFragment : Fragment(R.layout.fragment_list) {
     protected lateinit var resume: ResumeStore
     protected lateinit var adapter: MediaAdapter
 
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // 削除の確認画面を出している間にアプリが終了させられても、戻ってきたら後始末できるように
+        pendingDelete = savedInstanceState?.getString(KEY_PENDING_DELETE)?.let {
+            runCatching { PlaylistItem.fromJson(org.json.JSONObject(it)) }.getOrNull()
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        pendingDelete?.let { outState.putString(KEY_PENDING_DELETE, it.toJson().toString()) }
+    }
+
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         list = view.findViewById(R.id.list)
         emptyView = view.findViewById(R.id.emptyView)
@@ -40,8 +53,15 @@ abstract class BaseListFragment : Fragment(R.layout.fragment_list) {
         adapter = MediaAdapter(resume, ::onRowClick, ::onRowLongClick)
         list.layoutManager = LinearLayoutManager(requireContext())
         list.adapter = adapter
-        grantButton.setOnClickListener { onGrantClick() }
+        grantButton.setOnClickListener {
+            // 「再試行」などに使っているときはその処理、そうでなければ「アクセスを許可」
+            val action = emptyAction
+            if (action != null) action() else onGrantClick()
+        }
     }
+
+    /** 空のときのボタンを「アクセスを許可」以外（「再試行」など）に使っているときの処理 */
+    private var emptyAction: (() -> Unit)? = null
 
     override fun onResume() {
         super.onResume()
@@ -57,14 +77,28 @@ abstract class BaseListFragment : Fragment(R.layout.fragment_list) {
         if (isResumed) (activity as? AppCompatActivity)?.supportActionBar?.subtitle = subtitle()
     }
 
-    protected fun showRows(rows: List<Row>, emptyMessage: String, emptyIconRes: Int = R.drawable.ic_movie) {
+    /** [actionLabel] と [action] を渡すと、空のときにボタン（「再試行」など）を出す */
+    protected fun showRows(
+        rows: List<Row>,
+        emptyMessage: String,
+        emptyIconRes: Int = R.drawable.ic_movie,
+        actionLabel: String? = null,
+        action: (() -> Unit)? = null,
+    ) {
         loading.visibility = View.GONE
         adapter.favoriteKeys = favoriteKeys()
         adapter.rows = rows
         if (rows.isEmpty()) {
             emptyText.text = emptyMessage
             emptyIcon.setImageResource(emptyIconRes)
-            grantButton.visibility = View.GONE
+            if (actionLabel != null && action != null) {
+                emptyAction = action
+                grantButton.text = actionLabel
+                grantButton.visibility = View.VISIBLE
+            } else {
+                emptyAction = null
+                grantButton.visibility = View.GONE
+            }
             emptyView.visibility = View.VISIBLE
             list.visibility = View.GONE
         } else {
@@ -86,6 +120,8 @@ abstract class BaseListFragment : Fragment(R.layout.fragment_list) {
         adapter.rows = emptyList()
         emptyText.setText(needPermissionText)
         emptyIcon.setImageResource(R.drawable.ic_folder)
+        emptyAction = null
+        grantButton.setText(R.string.grant_permission)
         grantButton.visibility = View.VISIBLE
         emptyView.visibility = View.VISIBLE
         list.visibility = View.GONE
@@ -176,4 +212,8 @@ abstract class BaseListFragment : Fragment(R.layout.fragment_list) {
 
     private fun favoriteKeys(): Set<String> =
         PlaylistStore(requireContext()).get(FavoriteMedia.PLAYLIST_ID)?.items?.mapTo(HashSet()) { it.key } ?: emptySet()
+
+    private companion object {
+        const val KEY_PENDING_DELETE = "pending_delete"
+    }
 }

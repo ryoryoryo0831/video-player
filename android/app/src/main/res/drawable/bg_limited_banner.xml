@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 動画タブの「一部の動画だけを表示しています」の帯 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/accent_soft" />
+    <corners android:radius="12dp" />
+</shape>

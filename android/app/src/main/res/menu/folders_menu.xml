@@ -5,6 +5,6 @@
         android:id="@+id/action_favorite"
         android:icon="@drawable/ic_star_border"
         android:orderInCategory="10"
-        android:title="お気に入りに追加"
+        android:title="@string/menu_add_to_favorites"
         app:showAsAction="always" />
 </menu>

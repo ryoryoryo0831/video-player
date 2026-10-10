@@ -45,6 +45,18 @@ object LastSession {
         val stopped: Boolean,
     ) {
         val current: PlaylistItem? get() = items.getOrNull(index)
+
+        /**
+         * 前回の続きとして読み込み直してよいか。[videoOnly]・[audioOnly] で、前回が動画（音楽）だったときだけに限る。
+         * わざと終わらせた再生は、[evenIfStopped]（ボタンで再生を頼まれたとき）でなければ戻さない
+         */
+        fun restorable(videoOnly: Boolean = false, audioOnly: Boolean = false, evenIfStopped: Boolean = false): Boolean {
+            val cur = current ?: return false
+            if (stopped && !evenIfStopped) return false
+            if (videoOnly && cur.isAudio) return false
+            if (audioOnly && !cur.isAudio) return false
+            return true
+        }
     }
 
     private fun file(context: Context) = File(context.applicationContext.filesDir, "last_session.json")
@@ -66,6 +78,7 @@ object LastSession {
     /** わざと再生を終わらせた（画面に戻ったときに、勝手に元に戻さない） */
     fun markStopped(context: Context) = prefs(context).edit().putBoolean("stopped", true).apply()
 
+    /** ファイルから読む（時間がかかることがあるので、できるだけ裏のスレッドで呼ぶ） */
     fun load(context: Context): Saved? = runCatching {
         val o = JSONObject(file(context).readText())
         val arr = o.getJSONArray("items")

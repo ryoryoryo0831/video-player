@@ -27,7 +27,9 @@ import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.accessibility.AccessibilityManager
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -42,6 +44,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.view.updateLayoutParams
 import androidx.core.view.updatePadding
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -91,16 +94,29 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var seekPreview: View
     private lateinit var seekPreviewImage: ImageView
     private lateinit var seekPreviewTime: TextView
+    private lateinit var loadingView: View
+    private lateinit var errorPanel: View
+    private lateinit var errorMessage: TextView
     private lateinit var audioManager: AudioManager
+    private val a11y: AccessibilityManager? by lazy { getSystemService(AccessibilityManager::class.java) }
 
     private val handler = Handler(Looper.getMainLooper())
     private val hasPip by lazy { packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE) }
 
     private var svc: PlaybackService? = null
-    /** 一覧などから開かれたときに、サービスにつながったら再生を始めるリスト */
-    private var pendingLoad: Triple<List<PlaylistItem>, Int, Boolean>? = null
+    /**
+     * 一覧などから開かれたときの Intent。サービスにつながったら、再生するリストにして再生を始める
+     * （リストにするときに ContentProvider へ問い合わせることがあるので、裏のスレッドで行う）
+     */
+    private var loadIntent: Intent? = null
     /** アプリが裏で終了させられたあとに画面が復元された場合、開き直すための Intent */
     private var restoreIntent: Intent? = null
+    /** サービスにつながったときの準備（裏での読み込み）の番号。待っている間に次の準備が始まったら、古いほうは使わない */
+    private var readyGeneration = 0
+    /** この画面が映像の表示先になっているか */
+    private var viewsAttached = false
+    /** 今の曲が音楽・再生するものが無かったので、映像の表示先にならずに閉じた（音楽は止めない） */
+    private var closedWithoutVideo = false
 
     private var lengthMs = 0L
     private var videoW = 0
@@ -134,6 +150,12 @@ class PlayerActivity : AppCompatActivity() {
     private val hideControlsTask = Runnable { hideControls() }
     private val hideUnlockTask = Runnable { unlockButton.visibility = View.GONE }
     private val hideRestartTask = Runnable { restartButton.visibility = View.GONE }
+    /** 読み込み中の表示（ローカルのファイルではすぐ終わるので、少し待ってから出す） */
+    private var loadingScheduled = false
+    private val showLoadingTask = Runnable {
+        loadingScheduled = false
+        loadingView.visibility = View.VISIBLE
+    }
     private val isTv by lazy { packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK) }
 
     /** ピンチで拡大した倍率（1 で元どおり） */
@@ -162,6 +184,12 @@ class PlayerActivity : AppCompatActivity() {
         override fun onModesChanged() = updateModes()
         override fun onPlaybackStopped() = finish()
         override fun onRenderersChanged() = updateModes()
+        override fun onPlaybackError(error: PlaybackService.PlaybackError): Boolean {
+            // 小窓（PiP）では操作できないので、いままでどおり終了してもらう
+            if (isFinishing || isDestroyed || inPip || svc?.currentItem?.isAudio == true) return false
+            showError(error)
+            return true
+        }
     }
 
     private val dialogHandler by lazy { VlcDialogHandler(this) { svc?.currentItem?.uri } }
@@ -250,12 +278,21 @@ class PlayerActivity : AppCompatActivity() {
         seekPreview = findViewById(R.id.seekPreview)
         seekPreviewImage = findViewById(R.id.seekPreviewImage)
         seekPreviewTime = findViewById(R.id.seekPreviewTime)
+        loadingView = findViewById(R.id.loadingIndicator)
+        errorPanel = findViewById(R.id.errorPanel)
+        errorMessage = findViewById(R.id.errorMessage)
+        findViewById<View>(R.id.errorRetry).setOnClickListener {
+            hideError()
+            svc?.retry()
+        }
+        // 閉じると onStop で再生も終わる
+        findViewById<View>(R.id.errorClose).setOnClickListener { finish() }
         thumbs = SeekThumbnails(applicationContext)
         collectSeekPreviews()
         restartButton.setOnClickListener {
             svc?.seekTo(0)
             restartButton.visibility = View.GONE
-            showInfo("最初から再生")
+            showInfo(getString(R.string.player_restart))
         }
         audioManager = getSystemService(AudioManager::class.java)
 
@@ -271,6 +308,7 @@ class PlayerActivity : AppCompatActivity() {
         setupControls()
         setupGestures()
         setupInsets()
+        updateTouchLayerDescription()
         if (savedInstanceState == null) takeLoadFrom(intent) else restoreIntent = intent
     }
 
@@ -280,13 +318,13 @@ class PlayerActivity : AppCompatActivity() {
         takeLoadFrom(intent)
         // 別の動画が選ばれた場合、表示中ならすぐ切り替える（裏にいた場合は onStart でつながってから）
         val s = svc
-        if (s != null && pendingLoad != null) startPendingLoad(s)
+        if (s != null && loadIntent != null) onServiceReady(s)
     }
 
-    /** 一覧などから開かれた場合は、再生するリストを受け取っておく（通知から開かれた場合は何もしない） */
+    /** 一覧などから開かれた場合は、再生する Intent を受け取っておく（通知から開かれた場合は何もしない） */
     private fun takeLoadFrom(intent: Intent) {
-        if (intent.getBooleanExtra(PlaybackService.EXTRA_FROM_SESSION, false)) return
-        pendingLoad = playlistFromIntent(intent)
+        if (intent.safeBooleanExtra(PlaybackService.EXTRA_FROM_SESSION)) return
+        loadIntent = intent
         manualOrientation = null
     }
 
@@ -305,22 +343,62 @@ class PlayerActivity : AppCompatActivity() {
         // 再生サービスが一度終了していたら、覚えておいたリストで続きから再生し直す
         restoreIntent?.let { ri ->
             restoreIntent = null
-            if (s.currentItem == null && pendingLoad == null && !ri.getBooleanExtra(PlaybackService.EXTRA_FROM_SESSION, false)) {
-                pendingLoad = playlistFromIntent(ri)
+            if (s.currentItem == null && loadIntent == null && !ri.safeBooleanExtra(PlaybackService.EXTRA_FROM_SESSION)) {
+                loadIntent = ri
+            }
+        }
+        val li = loadIntent
+        val gen = ++readyGeneration
+        if (li == null && s.currentItem != null) {
+            setUpPlayer(s, null, null)
+            return
+        }
+        // 再生するリストづくり（ContentProvider への問い合わせ）や前回の続きの読み込みは裏で行う
+        scheduleLoading()
+        lifecycleScope.launch {
+            val load = li?.let { playlistFromIntentAsync(it) }
+            val saved = if (load == null && s.currentItem == null) {
+                withContext(Dispatchers.IO) { LastSession.load(applicationContext) }
+            } else null
+            // 待っている間に画面を離れた・別の動画が選ばれた
+            if (gen != readyGeneration || svc !== s) return@launch
+            if (loadIntent === li) loadIntent = null
+            setUpPlayer(s, load, saved)
+        }
+    }
+
+    /**
+     * 映像の表示先になって再生を始める（[load] は一覧などから渡されたリスト、
+     * [saved] は再生サービスが止められていたときに読み込み直す前回の続き）
+     */
+    private fun setUpPlayer(s: PlaybackService, load: Triple<List<PlaylistItem>, Int, Boolean>?, saved: LastSession.Saved?) {
+        // 今の曲が音楽・再生するものが無いときは、映像の表示先にならずに閉じる（音楽はそのまま続ける）
+        if (load == null) {
+            val restorable = s.currentItem == null && saved?.restorable(videoOnly = true) == true
+            val cur = s.currentItem ?: saved?.current?.takeIf { restorable }
+            if (cur == null || cur.isAudio) {
+                closedWithoutVideo = true
+                hideLoading()
+                finish()
+                return
             }
         }
         // 自由な小窓で再生していたら、この画面に戻す
         s.closePopup()
-        if (pendingLoad != null) s.ensureEngineUpToDate()
+        if (load != null) s.ensureEngineUpToDate()
         // 「︙ → 設定」で字幕の見た目などを変えて戻ってきたら、今の動画にもすぐ反映する
-        val engineRebuilt = pendingLoad == null && s.currentItem?.isAudio == false && s.recreateEngineKeepingItem()
-        s.player.attachViews(videoLayout, null, true, false)
+        val engineRebuilt = load == null && s.currentItem?.isAudio == false && s.recreateEngineKeepingItem()
+        if (!viewsAttached) {
+            s.player.attachViews(videoLayout, null, true, false)
+            viewsAttached = true
+        }
         s.videoUiAttached = true
         // 裏に回っている間に再生サービスが OS に止められていたら、前回の動画を一時停止のまま用意し直す
-        if (pendingLoad == null && s.currentItem == null) s.restoreLastSession(play = false, videoOnly = true)
+        if (load == null && s.currentItem == null) s.restoreLastSession(play = false, videoOnly = true, saved = saved)
         when {
-            pendingLoad != null -> startPendingLoad(s)
+            load != null -> startPendingLoad(s, load)
             s.currentItem == null || s.currentItem?.isAudio == true -> {
+                closedWithoutVideo = true
                 finish()
                 return
             }
@@ -332,9 +410,8 @@ class PlayerActivity : AppCompatActivity() {
         askOverlayPermissionOnce()
     }
 
-    private fun startPendingLoad(s: PlaybackService) {
-        val (items, index, shuffle) = pendingLoad ?: return
-        pendingLoad = null
+    private fun startPendingLoad(s: PlaybackService, load: Triple<List<PlaylistItem>, Int, Boolean>) {
+        val (items, index, shuffle) = load
         // 一覧から渡されたリストなら、終わったら次へ進むかどうかも一覧の指定に従う
         s.load(items, index, shuffle, advance = items !== Playlist.items || Playlist.autoAdvance)
         val start = if (AppSettings.resume(this)) ResumeStore(this).get(items[index].key) else 0L
@@ -374,6 +451,8 @@ class PlayerActivity : AppCompatActivity() {
         val s = svc
         if (s != null) {
             when {
+                // 今の曲が音楽だったので開かずに閉じた・まだ再生の準備ができていない：再生には触らない
+                closedWithoutVideo || !viewsAttached -> {}
                 // キャスト中はテレビで再生を続ける（戻るボタンで閉じても止めない）
                 s.renderer != null -> {}
                 // 戻るボタンで閉じた
@@ -385,8 +464,11 @@ class PlayerActivity : AppCompatActivity() {
                 // 普段は一時停止して映像だけ止めておき、戻ってきたら続きから
                 else -> s.park()
             }
-            s.videoUiAttached = false
-            s.player.detachViews()
+            if (viewsAttached) {
+                s.videoUiAttached = false
+                s.player.detachViews()
+                viewsAttached = false
+            }
             // 小窓のときは、閉じられたことを受け取れるようにつないだままにしておく
             if (inPip && !isFinishing) return
             s.removeListener(listener)
@@ -417,22 +499,34 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun handleEvent(e: MediaPlayer.Event) {
         when (e.type) {
+            // 開いている・読み込んでいる間はくるくるを出す
+            MediaPlayer.Event.Opening -> {
+                hideError()
+                scheduleLoading()
+            }
+            MediaPlayer.Event.Buffering -> if (e.buffering < 100f) scheduleLoading() else hideLoading()
             MediaPlayer.Event.Playing -> {
-                playButton.setImageResource(R.drawable.ic_pause)
+                hideLoading()
+                hideError()
+                setPlayIcon(true)
                 videoLayout.keepScreenOn = true
                 scheduleHide()
                 updatePipParams()
             }
             MediaPlayer.Event.Paused -> {
-                playButton.setImageResource(R.drawable.ic_play)
+                hideLoading()
+                setPlayIcon(false)
                 videoLayout.keepScreenOn = false
                 showControls(autoHide = false)
                 updatePipParams()
             }
             MediaPlayer.Event.Stopped -> {
-                playButton.setImageResource(R.drawable.ic_play)
+                hideLoading()
+                setPlayIcon(false)
                 videoLayout.keepScreenOn = false
             }
+            // 次へ進む・エラーを表示するのはサービスからの知らせで行う
+            MediaPlayer.Event.EncounteredError, MediaPlayer.Event.EndReached -> hideLoading()
             MediaPlayer.Event.LengthChanged -> setLength(e.lengthChanged)
             MediaPlayer.Event.TimeChanged -> {
                 if (lengthMs <= 0) svc?.let { setLength(it.lengthMs) }
@@ -441,8 +535,47 @@ class PlayerActivity : AppCompatActivity() {
                     timeCurrent.text = formatTime(e.timeChanged)
                 }
             }
-            MediaPlayer.Event.Vout -> if (e.voutCount > 0) onVideoReady()
+            MediaPlayer.Event.Vout -> {
+                hideLoading()
+                if (e.voutCount > 0) onVideoReady()
+            }
         }
+    }
+
+    /** 再生・一時停止ボタンの絵と、読み上げの名前を合わせる */
+    private fun setPlayIcon(playing: Boolean) {
+        playButton.setImageResource(if (playing) R.drawable.ic_pause else R.drawable.ic_play)
+        playButton.contentDescription = getString(if (playing) R.string.player_pause else R.string.player_play)
+    }
+
+    // ---------- 読み込み中・再生エラーの表示 ----------
+
+    private fun scheduleLoading() {
+        if (loadingScheduled || loadingView.visibility == View.VISIBLE || inPip || errorPanel.visibility == View.VISIBLE) return
+        loadingScheduled = true
+        handler.postDelayed(showLoadingTask, LOADING_DELAY_MS)
+    }
+
+    private fun hideLoading() {
+        handler.removeCallbacks(showLoadingTask)
+        loadingScheduled = false
+        loadingView.visibility = View.GONE
+    }
+
+    /** 再生できなかった理由と「再試行」「閉じる」を出す */
+    private fun showError(error: PlaybackService.PlaybackError) {
+        hideLoading()
+        hideControls()
+        setPlayIcon(false)
+        videoLayout.keepScreenOn = false
+        errorMessage.text = if (error.title.isNotEmpty()) "${error.title}\n\n${error.reason}" else error.reason
+        errorPanel.visibility = View.VISIBLE
+        // リモコン（Android TV）でもすぐ選べるように
+        findViewById<View>(R.id.errorRetry).requestFocus()
+    }
+
+    private fun hideError() {
+        errorPanel.visibility = View.GONE
     }
 
     private fun refreshAll() {
@@ -451,9 +584,13 @@ class PlayerActivity : AppCompatActivity() {
         val t = s.player.time.coerceAtLeast(0)
         seekBar.progress = t.toInt()
         timeCurrent.text = formatTime(t)
-        playButton.setImageResource(if (s.isPlaying) R.drawable.ic_pause else R.drawable.ic_play)
+        setPlayIcon(s.isPlaying)
         videoLayout.keepScreenOn = s.isPlaying
         if (s.player.videoTracksCount > 0) onVideoReady()
+        // 再生できなかったまま戻ってきたときは、理由をもう一度出す
+        val error = s.lastError
+        if (error != null) showError(error) else hideError()
+        if (s.isPreparing) scheduleLoading() else hideLoading()
     }
 
     /** 表示中の動画（曲の情報が後から届いたときに、シークバーを 0 に戻さないように区別する） */
@@ -469,18 +606,34 @@ class PlayerActivity : AppCompatActivity() {
             seekBar.progress = 0
             timeDuration.text = formatTime(0)
         }
+        if (s.lastError == null) hideError()
+        // 次の曲・動画を開く準備中
+        if (s.isPreparing) scheduleLoading()
         setLength(s.lengthMs)
         updateModes()
     }
 
     private fun updateModes() {
         val s = svc ?: return
+        // 次が無いときは押せないようにする（薄くするだけでなく、読み上げでも「無効」と伝わるように）
+        nextButton.isEnabled = s.hasNext()
         nextButton.alpha = if (s.hasNext()) 1f else 0.4f
         speedButton.text = formatRate(s.rate)
+        speedButton.contentDescription = getString(R.string.player_speed_desc, formatRate(s.rate).removeSuffix("x"))
         repeatButton.setImageResource(if (s.repeat == PlaybackService.Repeat.ONE) R.drawable.ic_repeat_one else R.drawable.ic_repeat)
         repeatButton.alpha = if (s.repeat == PlaybackService.Repeat.OFF) 0.5f else 1f
         repeatButton.setColorFilter(
             if (s.repeat == PlaybackService.Repeat.OFF) Color.WHITE else ContextCompat.getColor(this, R.color.accent)
+        )
+        ViewCompat.setStateDescription(
+            repeatButton,
+            getString(
+                when (s.repeat) {
+                    PlaybackService.Repeat.OFF -> R.string.player_state_off
+                    PlaybackService.Repeat.ALL -> R.string.player_repeat_all
+                    PlaybackService.Repeat.ONE -> R.string.player_repeat_one_video
+                }
+            ),
         )
         val ab = s.abLabel()
         abIndicator.text = ab
@@ -715,7 +868,7 @@ class PlayerActivity : AppCompatActivity() {
         val items = buildList {
             add(SheetItem(if (fav) R.drawable.ic_star else R.drawable.ic_star_border, if (fav) "お気に入りから外す" else "お気に入りに追加", active = fav) {
                 val added = FavoriteMedia.toggle(this@PlayerActivity, item)
-                showInfo(if (added) "★  お気に入りに追加しました" else "お気に入りから外しました")
+                showInfo(if (added) "お気に入りに追加しました" else "お気に入りから外しました")
             })
             add(SheetItem(R.drawable.ic_playlist_add, "プレイリストに追加") { PlaylistDialogs.addToPlaylist(this@PlayerActivity, listOf(item)) })
             add(SheetItem(R.drawable.ic_queue, "再生キュー", "${s.orderPos + 1} / ${s.order.size}") { PlayerDialogs.showQueue(this@PlayerActivity, s) })
@@ -829,23 +982,31 @@ class PlayerActivity : AppCompatActivity() {
     /** いま表示している映像をそのまま画像として保存する */
     private fun takeScreenshot() {
         val surface = findSurface(videoLayout)
-        if (surface == null || surface.width == 0 || surface.height == 0) {
+        // 映像の面がまだ無い・作り直している途中のときは撮れない
+        if (surface == null || surface.width == 0 || surface.height == 0 || !surface.holder.surface.isValid) {
             showInfo("スクリーンショットを撮れませんでした")
             return
         }
-        val bitmap = android.graphics.Bitmap.createBitmap(surface.width, surface.height, android.graphics.Bitmap.Config.ARGB_8888)
-        android.view.PixelCopy.request(surface, bitmap, { result ->
-            if (result != android.view.PixelCopy.SUCCESS) {
-                showInfo("スクリーンショットを撮れませんでした")
-                return@request
-            }
-            val name = (svc?.currentItem?.title?.substringBeforeLast('.') ?: "screenshot") +
-                "_" + formatTime(svc?.player?.time ?: 0).replace(':', '-')
-            lifecycleScope.launch {
-                val saved = withContext(Dispatchers.IO) { Screenshots.save(this@PlayerActivity, bitmap, name) }
-                showInfo(if (saved != null) "📷  保存しました\n$saved" else "保存できませんでした")
-            }
-        }, handler)
+        try {
+            val bitmap = android.graphics.Bitmap.createBitmap(surface.width, surface.height, android.graphics.Bitmap.Config.ARGB_8888)
+            android.view.PixelCopy.request(surface, bitmap, { result ->
+                if (result != android.view.PixelCopy.SUCCESS) {
+                    showInfo("スクリーンショットを撮れませんでした")
+                    return@request
+                }
+                val name = (svc?.currentItem?.title?.substringBeforeLast('.') ?: "screenshot") +
+                    "_" + formatTime(svc?.player?.time ?: 0).replace(':', '-')
+                lifecycleScope.launch {
+                    val saved = withContext(Dispatchers.IO) { Screenshots.save(this@PlayerActivity, bitmap, name) }
+                    showInfo(if (saved != null) "保存しました\n$saved" else "保存できませんでした")
+                }
+            }, handler)
+        } catch (_: Exception) {
+            // 呼んだ瞬間に映像の面が無くなった（IllegalArgumentException）など
+            showInfo("スクリーンショットを撮れませんでした")
+        } catch (_: OutOfMemoryError) {
+            showInfo("スクリーンショットを撮れませんでした")
+        }
     }
 
     /** VLC の映像を表示している SurfaceView を探す（字幕用の面より先にある） */
@@ -879,7 +1040,7 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
-    private fun volumeText(percent: Int) = "🔊  音量 $percent%" + if (percent > 100) "（ブースト）" else ""
+    private fun volumeText(percent: Int) = "音量 $percent%" + if (percent > 100) "（ブースト）" else ""
 
     /**
      * リモコン（Android TV）やキーボードでの操作と、音量ボタンでのブースト。
@@ -894,14 +1055,14 @@ class PlayerActivity : AppCompatActivity() {
                 }
                 android.view.KeyEvent.KEYCODE_MEDIA_PLAY -> { s0.play(); return true }
                 android.view.KeyEvent.KEYCODE_MEDIA_PAUSE -> { s0.pause(); showControls(autoHide = false); return true }
-                android.view.KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { s0.seekBy(doubleTapMs); showInfo("${doubleTapMs / 1000}秒  ⏩"); return true }
-                android.view.KeyEvent.KEYCODE_MEDIA_REWIND -> { s0.seekBy(-doubleTapMs); showInfo("⏪  ${doubleTapMs / 1000}秒"); return true }
+                android.view.KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { s0.seekBy(doubleTapMs); showInfo("${doubleTapMs / 1000}秒進む"); return true }
+                android.view.KeyEvent.KEYCODE_MEDIA_REWIND -> { s0.seekBy(-doubleTapMs); showInfo("${doubleTapMs / 1000}秒戻る"); return true }
                 android.view.KeyEvent.KEYCODE_MEDIA_NEXT -> { s0.next(); return true }
                 android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS -> { s0.previous(); return true }
                 android.view.KeyEvent.KEYCODE_DPAD_LEFT, android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> if (!controlsVisible) {
                     val forward = keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT
                     s0.seekBy(if (forward) 10_000 else -10_000)
-                    showInfo(if (forward) "10秒  ⏩" else "⏪  10秒")
+                    showInfo(if (forward) "10秒進む" else "10秒戻る")
                     return true
                 }
                 android.view.KeyEvent.KEYCODE_DPAD_CENTER, android.view.KeyEvent.KEYCODE_ENTER,
@@ -1061,7 +1222,7 @@ class PlayerActivity : AppCompatActivity() {
         longPressRate = s.rate
         s.setPlaybackRate(2f)
         touchLayer.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-        showInfo("2倍速  ⏩", autoHide = false)
+        showInfo("2倍速で再生中", autoHide = false)
     }
 
     /** 指を離したら元の速さに戻す */
@@ -1094,6 +1255,24 @@ class PlayerActivity : AppCompatActivity() {
             v.updatePadding(left = bottomSide + cut.left, right = bottomSide + cut.right, bottom = bottomPad + cut.bottom)
             insets
         }
+        // ロック解除・「最初から再生」のボタンも、切り欠きやナビゲーションバーに隠れないようにずらす
+        val unlockStart = (unlockButton.layoutParams as ViewGroup.MarginLayoutParams).marginStart
+        ViewCompat.setOnApplyWindowInsetsListener(unlockButton) { v, insets ->
+            val cut = safe(insets)
+            v.updateLayoutParams<ViewGroup.MarginLayoutParams> { marginStart = unlockStart + cut.left }
+            insets
+        }
+        val restartLp = restartButton.layoutParams as ViewGroup.MarginLayoutParams
+        val restartEnd = restartLp.marginEnd
+        val restartBottom = restartLp.bottomMargin
+        ViewCompat.setOnApplyWindowInsetsListener(restartButton) { v, insets ->
+            val cut = safe(insets)
+            v.updateLayoutParams<ViewGroup.MarginLayoutParams> {
+                marginEnd = restartEnd + cut.right
+                bottomMargin = restartBottom + cut.bottom
+            }
+            insets
+        }
     }
 
     private fun View.fadeIn() {
@@ -1111,11 +1290,13 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun showControls(autoHide: Boolean = true) {
-        if (locked || inPip) return
+        // 再生エラーの表示中は、その上に操作パネルを重ねない
+        if (locked || inPip || errorPanel.visibility == View.VISIBLE) return
         topBar.fadeIn()
         bottomBar.fadeIn()
         centerControls.fadeIn()
         controlsVisible = true
+        updateTouchLayerDescription()
         updateSystemBars()
         handler.removeCallbacks(hideControlsTask)
         if (autoHide) scheduleHide()
@@ -1131,12 +1312,28 @@ class PlayerActivity : AppCompatActivity() {
         bottomBar.fadeOut()
         centerControls.fadeOut()
         controlsVisible = false
+        updateTouchLayerDescription()
         updateSystemBars()
+    }
+
+    /** 画面のタップ（TalkBack ではダブルタップ）で何が起きるかを読み上げる */
+    private fun updateTouchLayerDescription() {
+        touchLayer.contentDescription =
+            getString(if (controlsVisible) R.string.player_hide_controls else R.string.player_show_controls)
     }
 
     private fun scheduleHide() {
         handler.removeCallbacks(hideControlsTask)
-        if (controlsVisible && !userSeeking && svc?.isPlaying == true) handler.postDelayed(hideControlsTask, 4000)
+        if (!controlsVisible || userSeeking || svc?.isPlaying != true) return
+        // TalkBack で操作している間は自動で隠さない（ボタンを探している間に消えないように）
+        if (a11y?.isTouchExplorationEnabled == true) return
+        // 「操作の時間」のユーザー補助設定があれば、その長さだけ出しておく
+        val delay = if (Build.VERSION.SDK_INT >= 29) {
+            a11y?.getRecommendedTimeoutMillis(
+                CONTROLS_HIDE_MS, AccessibilityManager.FLAG_CONTENT_CONTROLS or AccessibilityManager.FLAG_CONTENT_ICONS,
+            ) ?: CONTROLS_HIDE_MS
+        } else CONTROLS_HIDE_MS
+        handler.postDelayed(hideControlsTask, delay.toLong())
     }
 
     private fun setLocked(lock: Boolean) {
@@ -1204,11 +1401,12 @@ class PlayerActivity : AppCompatActivity() {
             ),
         )
         val playing = svc?.isPlaying == true
+        val sec = doubleTapMs / 1000
         val basic = listOf(
-            action(R.drawable.ic_stat_rewind, "戻る", PIP_REWIND),
+            action(R.drawable.ic_stat_rewind, "${sec}秒戻る", PIP_REWIND),
             if (playing) action(R.drawable.ic_stat_pause, "一時停止", PIP_PLAY_PAUSE)
             else action(R.drawable.ic_stat_play, "再生", PIP_PLAY_PAUSE),
-            action(R.drawable.ic_stat_forward, "進む", PIP_FORWARD),
+            action(R.drawable.ic_stat_forward, "${sec}秒進む", PIP_FORWARD),
         )
         if (maxNumPictureInPictureActions < 5) return basic
         return listOf(action(R.drawable.ic_stat_skip_previous, "前へ", PIP_PREVIOUS)) + basic +
@@ -1267,10 +1465,12 @@ class PlayerActivity : AppCompatActivity() {
         s.setVideoEnabled(false)
         s.videoUiAttached = false
         s.player.detachViews()
+        viewsAttached = false
         if (!s.showPopup()) {
             handedToPopup = false
             s.addListener(listener)
             s.player.attachViews(videoLayout, null, true, false)
+            viewsAttached = true
             s.videoUiAttached = true
             s.restoreVideo()
             Toast.makeText(this, "小窓を表示できませんでした", Toast.LENGTH_SHORT).show()
@@ -1320,6 +1520,7 @@ class PlayerActivity : AppCompatActivity() {
         if (inPip) {
             setZoom(1f)
             hideControls()
+            hideLoading()
             unlockButton.visibility = View.GONE
             gestureInfo.visibility = View.GONE
         } else if (lifecycle.currentState == Lifecycle.State.CREATED) {
@@ -1385,8 +1586,8 @@ class PlayerActivity : AppCompatActivity() {
                 val w = touchLayer.width
                 val sec = doubleTapMs / 1000
                 when {
-                    e.x < w / 3f -> { s.seekBy(-doubleTapMs); showInfo("⏪  ${sec}秒") }
-                    e.x > w * 2 / 3f -> { s.seekBy(doubleTapMs); showInfo("${sec}秒  ⏩") }
+                    e.x < w / 3f -> { s.seekBy(-doubleTapMs); showInfo("${sec}秒戻る") }
+                    e.x > w * 2 / 3f -> { s.seekBy(doubleTapMs); showInfo("${sec}秒進む") }
                     else -> s.togglePlay()
                 }
                 return true
@@ -1429,7 +1630,7 @@ class PlayerActivity : AppCompatActivity() {
                     Gesture.BRIGHTNESS -> {
                         val v = (gestureStartValue - dy / h).coerceIn(0.01f, 1f)
                         window.attributes = window.attributes.apply { screenBrightness = v }
-                        showInfo("☀  明るさ ${(v * 100).roundToInt()}%", autoHide = false)
+                        showInfo("明るさ ${(v * 100).roundToInt()}%", autoHide = false)
                     }
                     Gesture.VOLUME -> {
                         // 画面の高さ 1.5 倍分で 0〜100%。ブーストがオンなら 200% まで
@@ -1451,6 +1652,10 @@ class PlayerActivity : AppCompatActivity() {
             }
         })
 
+        // TalkBack などのユーザー補助から「クリック」されたとき（普通のタップは下の OnTouchListener が受け取るので、ここには来ない）
+        touchLayer.setOnClickListener {
+            if (locked) showUnlockBriefly() else toggleControls()
+        }
         touchLayer.setOnTouchListener { _, e ->
             if (locked) {
                 if (e.actionMasked == MotionEvent.ACTION_UP) showUnlockBriefly()
@@ -1490,6 +1695,10 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private companion object {
+        /** 読み込み中の表示を出すまで待つ時間（ローカルのファイルでちらつかないように） */
+        const val LOADING_DELAY_MS = 400L
+        /** 操作パネルを自動で隠すまでの時間 */
+        const val CONTROLS_HIDE_MS = 4000
         const val ACTION_PIP = "com.ryose.videoplayer.PIP_CONTROL"
         const val EXTRA_PIP = "control"
         const val PIP_REWIND = 1

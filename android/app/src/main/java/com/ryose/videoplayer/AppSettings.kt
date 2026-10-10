@@ -87,6 +87,10 @@ object AppSettings {
     fun popupPermissionAsked(c: Context) = bool(c, "popup_permission_asked", false)
     fun setPopupPermissionAsked(c: Context) = prefs(c).edit().putBoolean("popup_permission_asked", true).apply()
 
+    /** 通知の許可（Android 13 以降）を一度聞いたか。断られても何度も聞かないように */
+    fun notificationPermissionAsked(c: Context) = bool(c, "notification_permission_asked", false)
+    fun setNotificationPermissionAsked(c: Context) = prefs(c).edit().putBoolean("notification_permission_asked", true).apply()
+
     // 一覧
     fun videosGrid(c: Context) = bool(c, "videos_grid", false)
     fun setVideosGrid(c: Context, v: Boolean) = prefs(c).edit().putBoolean("videos_grid", v).apply()

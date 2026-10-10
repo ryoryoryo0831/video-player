@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@android:color/black">
@@ -10,11 +11,26 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <!-- タップ・スワイプなどのジェスチャーを受け取る透明なレイヤー -->
+    <!-- タップ・スワイプなどのジェスチャーを受け取る透明なレイヤー（TalkBack ではダブルタップで操作パネルを出し入れ） -->
     <View
         android:id="@+id/touchLayer"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="match_parent"
+        android:contentDescription="@string/player_show_controls" />
+
+    <!-- 開いている・読み込んでいる間のくるくる（再生ボタンを囲む大きさ。出すのは少し待ってから） -->
+    <com.google.android.material.progressindicator.CircularProgressIndicator
+        android:id="@+id/loadingIndicator"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:contentDescription="@string/player_loading"
+        android:indeterminate="true"
+        android:visibility="gone"
+        app:indicatorColor="#FFFFFF"
+        app:indicatorSize="100dp"
+        app:trackColor="@android:color/transparent"
+        app:trackThickness="3dp" />
 
     <!-- 上部バー -->
     <LinearLayout
@@ -148,12 +164,13 @@
             <TextView
                 android:id="@+id/timeCurrent"
                 style="@style/PlayerTime"
-                android:text="0:00" />
+                android:text="@string/player_time_zero" />
 
+            <!-- 押しやすいように高さは 48dp（線の太さ・見た目は変えない） -->
             <SeekBar
                 android:id="@+id/seekBar"
                 android:layout_width="0dp"
-                android:layout_height="wrap_content"
+                android:layout_height="48dp"
                 android:layout_weight="1"
                 android:minHeight="6dp"
                 android:maxHeight="6dp"
@@ -162,7 +179,7 @@
             <TextView
                 android:id="@+id/timeDuration"
                 style="@style/PlayerTime"
-                android:text="0:00" />
+                android:text="@string/player_time_zero" />
         </LinearLayout>
 
         <!-- 道具のボタン（画面の幅に合わせて均等に並べる） -->
@@ -211,9 +228,9 @@
                 android:contentDescription="@string/speed"
                 android:focusable="true"
                 android:gravity="center"
-                android:text="1x"
                 android:textColor="#FFFFFF"
                 android:textSize="15sp"
+                tools:text="1x"
                 android:textStyle="bold" />
 
             <ImageButton
@@ -239,7 +256,7 @@
         android:visibility="gone"
         app:drawableTopCompat="@drawable/ic_cast_connected" />
 
-    <!-- 画面ロック中だけ表示する解除ボタン -->
+    <!-- 画面ロック中だけ表示する解除ボタン（切り欠き・バーの分の余白はコードで足す） -->
     <ImageButton
         android:id="@+id/unlockButton"
         android:layout_width="60dp"
@@ -253,7 +270,7 @@
         android:src="@drawable/ic_lock"
         android:visibility="gone" />
 
-    <!-- 続きから再生したときに少しだけ出す「最初から再生」 -->
+    <!-- 続きから再生したときに少しだけ出す「最初から再生」（切り欠き・バーの分の余白はコードで足す） -->
     <TextView
         android:id="@+id/restartButton"
         android:layout_width="wrap_content"
@@ -262,14 +279,16 @@
         android:layout_marginEnd="16dp"
         android:layout_marginBottom="140dp"
         android:background="@drawable/bg_info"
+        android:drawablePadding="8dp"
         android:focusable="true"
         android:minHeight="48dp"
         android:gravity="center"
         android:paddingHorizontal="16dp"
-        android:text="⏮  最初から再生"
+        android:text="@string/player_restart"
         android:textColor="#FFFFFF"
         android:textSize="15sp"
-        android:visibility="gone" />
+        android:visibility="gone"
+        app:drawableStartCompat="@drawable/ic_replay" />
 
     <!-- シークバーを動かしている間に出す、その位置の画像と時間（位置はコードで合わせる） -->
     <LinearLayout
@@ -300,6 +319,79 @@
             android:textColor="#FFFFFF"
             android:textSize="15sp"
             android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- 再生できなかったときの表示（理由・再試行・閉じる） -->
+    <LinearLayout
+        android:id="@+id/errorPanel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:layout_marginHorizontal="24dp"
+        android:accessibilityLiveRegion="polite"
+        android:background="@drawable/bg_info"
+        android:clickable="true"
+        android:focusable="false"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:paddingHorizontal="24dp"
+        android:paddingTop="20dp"
+        android:paddingBottom="8dp"
+        android:visibility="gone">
+
+        <ImageView
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/ic_err_alert" />
+
+        <TextView
+            android:id="@+id/errorTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center"
+            android:text="@string/player_error_title"
+            android:textColor="#FFFFFF"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/errorMessage"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center"
+            android:maxWidth="360dp"
+            android:maxLines="8"
+            android:ellipsize="end"
+            android:textColor="#CCFFFFFF"
+            android:textSize="14sp" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:gravity="center"
+            android:orientation="horizontal">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/errorClose"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp"
+                android:text="@string/close"
+                android:textColor="#FFFFFF" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/errorRetry"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/player_retry"
+                app:icon="@drawable/ic_replay"
+                app:iconTint="#FFFFFF" />
+        </LinearLayout>
     </LinearLayout>
 
     <TextView

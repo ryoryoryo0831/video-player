@@ -3,10 +3,46 @@
     <!-- 一覧などの画面。設定で「明るい／暗い／端末に合わせる」を切り替える（色は colors.xml） -->
     <style name="Theme.VideoPlayer" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">@color/accent</item>
-        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorOnPrimary">@color/role_on_primary</item>
+        <item name="colorPrimaryContainer">@color/role_primary_container</item>
+        <item name="colorOnPrimaryContainer">@color/role_on_primary_container</item>
+        <item name="colorPrimaryInverse">@color/role_inverse_primary</item>
+        <item name="colorSecondary">@color/role_secondary</item>
+        <item name="colorOnSecondary">@color/role_on_secondary</item>
+        <item name="colorSecondaryContainer">@color/role_secondary_container</item>
+        <item name="colorOnSecondaryContainer">@color/role_on_secondary_container</item>
+        <item name="colorTertiary">@color/role_tertiary</item>
+        <item name="colorOnTertiary">@color/role_on_tertiary</item>
+        <item name="colorTertiaryContainer">@color/role_tertiary_container</item>
+        <item name="colorOnTertiaryContainer">@color/role_on_tertiary_container</item>
         <item name="android:colorBackground">@color/bg</item>
+        <item name="colorOnBackground">@color/text_primary</item>
         <item name="android:windowBackground">@color/bg</item>
         <item name="colorSurface">@color/surface</item>
+        <item name="colorOnSurface">@color/text_primary</item>
+        <item name="colorSurfaceVariant">@color/card</item>
+        <item name="colorOnSurfaceVariant">@color/text_muted</item>
+        <item name="colorSurfaceDim">@color/role_surface_dim</item>
+        <item name="colorSurfaceBright">@color/role_surface_bright</item>
+        <!-- ダイアログ・メニュー・下から出るシートなどの背景 -->
+        <item name="colorSurfaceContainerLowest">@color/role_surface_container_lowest</item>
+        <item name="colorSurfaceContainerLow">@color/role_surface_container_low</item>
+        <item name="colorSurfaceContainer">@color/role_surface_container</item>
+        <item name="colorSurfaceContainerHigh">@color/role_surface_container_high</item>
+        <item name="colorSurfaceContainerHighest">@color/role_surface_container_highest</item>
+        <item name="colorSurfaceInverse">@color/role_inverse_surface</item>
+        <item name="colorOnSurfaceInverse">@color/role_inverse_on_surface</item>
+        <item name="colorOutline">@color/role_outline</item>
+        <item name="colorOutlineVariant">@color/role_outline_variant</item>
+    </style>
+
+    <!-- 起動中の画面（Android 12 以降のスプラッシュ画面。古い端末でも同じ見た目にする） -->
+    <style name="Theme.VideoPlayer.Starting" parent="Theme.SplashScreen.IconBackground">
+        <item name="windowSplashScreenBackground">@color/bg</item>
+        <!-- アイコンの再生マークは白なので、アクセントの青の丸の上に置く -->
+        <item name="windowSplashScreenIconBackgroundColor">@color/accent</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.VideoPlayer</item>
     </style>
 
     <!-- 動画の再生画面は、テーマの設定にかかわらずいつも暗い -->

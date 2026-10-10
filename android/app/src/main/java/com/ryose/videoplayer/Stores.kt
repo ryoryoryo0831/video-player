@@ -116,11 +116,14 @@ class PlaylistStore(context: Context) {
         val text = arr.toString()
         writer.execute {
             // 書き込み途中で壊れないよう、一時ファイルに書いてから置き換える
-            val tmp = File(file.path + ".tmp")
-            tmp.writeText(text)
-            if (!tmp.renameTo(file)) {
-                file.delete()
-                tmp.renameTo(file)
+            // （容量不足などで書けなくても、アプリごと落ちないようにする）
+            runCatching {
+                val tmp = File(file.path + ".tmp")
+                tmp.writeText(text)
+                if (!tmp.renameTo(file)) {
+                    file.delete()
+                    tmp.renameTo(file)
+                }
             }
         }
     }

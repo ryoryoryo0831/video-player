@@ -40,6 +40,10 @@ class App : Application(), ImageLoaderFactory {
             runCatching { ThumbCache.trim(this@App) }
             runCatching { ResumeStore(this@App).prune() }
         }
+        // 登録したサーバーのパスワードを戻す処理（鍵保管庫）は重いので、画面で使う前に裏で済ませておく
+        CoroutineScope(Dispatchers.IO).launch {
+            runCatching { ServerStore(this@App).preload() }
+        }
     }
 
     override fun newImageLoader(): ImageLoader =
@@ -83,12 +87,22 @@ object ThumbCache {
             return null
         }
         val scaled = scaleDown(bitmap)
-        val tmp = File(file.path + ".tmp")
-        tmp.outputStream().use { scaled.compress(Bitmap.CompressFormat.JPEG, 85, it) }
-        if (scaled !== bitmap) scaled.recycle()
-        bitmap.recycle()
-        tmp.renameTo(file)
-        return file
+        // 同じサムネイルを同時に作っても混ざらないよう、書き込みごとに別の一時ファイルを使う
+        var tmp: File? = null
+        val ok = try {
+            val t = File.createTempFile("thumb", ".tmp", file.parentFile)
+            tmp = t
+            t.outputStream().use { scaled.compress(Bitmap.CompressFormat.JPEG, 85, it) } &&
+                (t.renameTo(file) || file.length() > 0)
+        } catch (_: Exception) {
+            false
+        } finally {
+            if (scaled !== bitmap) scaled.recycle()
+            bitmap.recycle()
+            // 置き換えに使われなかった一時ファイルは消す
+            tmp?.takeIf { it.exists() }?.delete()
+        }
+        return if (ok && file.length() > 0) file else null
     }
 
     private fun scaleDown(b: Bitmap): Bitmap {

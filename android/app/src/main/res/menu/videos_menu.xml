@@ -32,7 +32,7 @@
         android:id="@+id/action_grid"
         android:checkable="true"
         android:orderInCategory="205"
-        android:title="グリッドで表示"
+        android:title="@string/menu_show_as_grid"
         app:showAsAction="never" />
     <item
         android:id="@+id/action_refresh"

@@ -2,6 +2,7 @@ package com.ryose.videoplayer
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
 import android.os.Build
@@ -17,16 +18,21 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import coil.load
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.videolan.libvlc.MediaPlayer
-import java.io.File
 
 class MainActivity : AppCompatActivity() {
 
@@ -67,25 +73,45 @@ class MainActivity : AppCompatActivity() {
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
-    /** 動画・音楽の一覧を読む許可。断られた（二度と聞けない）ときは、ほかの方法を案内する */
+    /**
+     * 動画・音楽の一覧を読む許可。
+     * 1 回断られただけなら、タブの「アクセスを許可」からもう一度聞ける。
+     * 二度と聞けない状態（「今後表示しない」・2 回断られた）のときだけ、端末の設定など、ほかの方法を案内する
+     */
     private val mediaPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-            if (result.values.none { it }) showAccessChoices()
+            if (result.isNotEmpty() && result.values.none { it } &&
+                result.keys.none { shouldShowRequestPermissionRationale(it) }
+            ) {
+                showAccessChoices()
+            }
         }
+
+    /** 通知の許可（再生中の通知・ロック画面の操作用）。結果に関係なく、聞くのは一度だけ */
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
     private val openDocuments =
         registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
             if (uris.isEmpty()) return@registerForActivityResult
-            uris.forEach {
-                try {
-                    contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                } catch (_: SecurityException) {
+            // 名前やファイルの場所を調べるのは時間がかかることがあるので、画面の処理とは別のところで行う
+            lifecycleScope.launch {
+                val items = withContext(Dispatchers.IO) {
+                    uris.map {
+                        try {
+                            contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        } catch (_: SecurityException) {
+                        }
+                        PlaylistItem(it, queryDisplayName(it) ?: it.lastPathSegment ?: "メディア", resolvePath(it))
+                    }
                 }
+                playItems(items, 0)
             }
-            playItems(uris.map { PlaylistItem(it, queryDisplayName(it) ?: it.lastPathSegment ?: "メディア", resolvePath(it)) }, 0)
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // 起動中の画面（スプラッシュ画面）。テーマを元に戻すので super.onCreate より前に呼ぶ
+        installSplashScreen()
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT),
@@ -96,8 +122,9 @@ class MainActivity : AppCompatActivity() {
 
         // Android 15 以降の全画面表示に合わせて、ステータスバー等の分だけ余白をとる
         // （下のナビゲーションバーの分は BottomNavigationView が自分で余白をとる）
+        // 横向きのときのカメラの切り欠き（ディスプレイカットアウト）にも重ならないように
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.root)) { v, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
             v.updatePadding(left = bars.left, top = bars.top, right = bars.right)
             insets
         }
@@ -127,6 +154,26 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         connection.bind()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        maybeAskNotificationPermission()
+    }
+
+    /**
+     * Android 13 以降は、再生中の通知を出すのに許可が要る。
+     * 起動してすぐに許可の画面を重ねないよう、動画・音楽を読む許可の流れが済んでから（何か読める状態になってから）一度だけ聞く
+     */
+    private fun maybeAskNotificationPermission() {
+        if (Build.VERSION.SDK_INT < 33 || AppSettings.notificationPermissionAsked(this)) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+            AppSettings.setNotificationPermissionAsked(this)
+            return
+        }
+        if (!(hasMediaAccess(audio = false) || hasMediaAccess(audio = true))) return
+        AppSettings.setNotificationPermissionAsked(this)
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
     override fun onStop() {

@@ -52,4 +52,31 @@
     <string name="delete_playlist">プレイリストを削除</string>
     <string name="reorder">並べ替え</string>
     <string name="playlist_empty">このプレイリストは空です。\n\n「動画」「フォルダ」「履歴」の画面で動画を長押しして、「プレイリストに追加」を選んでください。</string>
+
+    <!-- 全体 -->
+    <string name="menu_add_to_favorites">お気に入りに追加</string>
+    <string name="menu_settings">設定</string>
+    <string name="menu_show_as_grid">グリッドで表示</string>
+    <string name="limited_access_note">一部の動画だけを表示しています</string>
+    <string name="limited_access_reselect">選び直す</string>
+
+    <!-- 再生画面 -->
+    <string name="player_play">再生</string>
+    <string name="player_pause">一時停止</string>
+    <string name="player_prev_neutral">前へ</string>
+    <string name="player_next_neutral">次へ</string>
+    <string name="player_speed_desc">再生速度 %1$s倍</string>
+    <string name="player_state_on">オン</string>
+    <string name="player_state_off">オフ</string>
+    <string name="player_repeat_all">すべてリピート</string>
+    <string name="player_repeat_one_video">1本リピート</string>
+    <string name="player_repeat_one_track">1曲リピート</string>
+    <string name="player_show_controls">操作パネルを表示</string>
+    <string name="player_hide_controls">操作パネルを隠す</string>
+    <string name="player_loading">読み込み中</string>
+    <string name="player_error_title">再生できませんでした</string>
+    <string name="player_retry">再試行</string>
+    <string name="player_restart">最初から再生</string>
+    <string name="player_now_playing">再生中</string>
+    <string name="player_time_zero" translatable="false">0:00</string>
 </resources>

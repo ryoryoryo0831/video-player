@@ -85,23 +85,32 @@ class ServerStore(context: Context) {
      * パスワードは暗号化して保存し、読み出すときに元に戻す。
      * 元に戻す処理は重いので、一度読んだらアプリを閉じるまで覚えておく（再生のたびに全部を戻さないように）
      */
-    fun all(): List<Server> = cache ?: try {
-        val arr = JSONArray(prefs.getString("list", "[]"))
-        val stored = (0 until arr.length()).map { Server.fromJson(arr.getJSONObject(it)) }
-        val list = stored.map { it.copy(password = Secrets.decrypt(it.password)) }
-        // 以前のバージョンで暗号化せずに保存したパスワードがあれば、暗号化して保存し直す
-        if (stored.any { it.password.isNotEmpty() && !Secrets.isEncrypted(it.password) }) save(list)
-        cache = list
-        list
-    } catch (_: Exception) {
-        emptyList()
+    fun all(): List<Server> = cache ?: synchronized(lock) {
+        // 裏での先読み（preload）と同時に呼ばれても、読み込みは 1 回だけにする
+        cache ?: try {
+            val arr = JSONArray(prefs.getString("list", "[]"))
+            val stored = (0 until arr.length()).map { Server.fromJson(arr.getJSONObject(it)) }
+            val list = stored.map { it.copy(password = Secrets.decrypt(it.password)) }
+            // 以前のバージョンで暗号化せずに保存したパスワードがあれば、暗号化して保存し直す
+            if (stored.any { it.password.isNotEmpty() && !Secrets.isEncrypted(it.password) }) save(list)
+            cache = list
+            list
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    /** アプリの起動時に裏のスレッドで呼び、パスワードを戻しておく（画面のスレッドで重い処理をしないように） */
+    fun preload() {
+        all()
     }
 
     private companion object {
         @Volatile var cache: List<Server>? = null
+        val lock = Any()
     }
 
-    private fun save(list: List<Server>) {
+    private fun save(list: List<Server>) = synchronized(lock) {
         cache = list
         val arr = JSONArray()
         list.forEach { s ->
@@ -114,12 +123,12 @@ class ServerStore(context: Context) {
 
     fun get(id: String) = all().find { it.id == id }
 
-    fun put(server: Server) {
+    fun put(server: Server) = synchronized(lock) {
         val list = all()
         save(if (list.any { it.id == server.id }) list.map { if (it.id == server.id) server else it } else list + server)
     }
 
-    fun remove(id: String) = save(all().filterNot { it.id == id })
+    fun remove(id: String) = synchronized(lock) { save(all().filterNot { it.id == id }) }
 
     /** その Uri と同じサーバー（種類・ホスト・ポートが一致）でログイン情報があるもの */
     fun find(uri: Uri): Server? {

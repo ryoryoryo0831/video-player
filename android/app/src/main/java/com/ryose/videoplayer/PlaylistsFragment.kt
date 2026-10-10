@@ -34,7 +34,13 @@ class PlaylistsFragment : BaseListFragment() {
         val lists = store.all().sortedBy { if (it.id == FavoriteMedia.PLAYLIST_ID) 0 else 1 }
         val rows = lists.map { p ->
             val total = p.items.sumOf { it.durationMs }
-            val info = "${p.items.size} 本" + if (total > 0) " · ${formatTime(total)}" else ""
+            // 全部が曲なら「曲」、全部が動画なら「本」、混ざっていれば「件」で数える
+            val unit = when {
+                p.items.isNotEmpty() && p.items.all { it.isAudio } -> "曲"
+                p.items.none { it.isAudio } -> "本"
+                else -> "件"
+            }
+            val info = "${p.items.size} $unit" + if (total > 0) " · ${formatTime(total)}" else ""
             val icon = if (p.id == FavoriteMedia.PLAYLIST_ID) R.drawable.ic_star else R.drawable.ic_playlist
             Row.Folder(p.name, info, icon, id = p.id)
         }

@@ -66,7 +66,8 @@ class PlaylistActivity : AppCompatActivity() {
         touchHelper.attachToRecyclerView(listView)
 
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.root)) { v, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            // 横向きのときのカメラの切り欠き（ディスプレイカットアウト）にも重ならないように
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
             v.updatePadding(left = bars.left, top = bars.top, right = bars.right)
             listView.updatePadding(bottom = bars.bottom)
             insets
@@ -81,7 +82,13 @@ class PlaylistActivity : AppCompatActivity() {
     private fun load() {
         val p = store.get(playlistId) ?: run { finish(); return }
         supportActionBar?.title = p.name
-        supportActionBar?.subtitle = "${p.items.size} 本"
+        // 全部が曲なら「曲」、全部が動画なら「本」、混ざっていれば「件」で数える
+        val unit = when {
+            p.items.isNotEmpty() && p.items.all { it.isAudio } -> "曲"
+            p.items.none { it.isAudio } -> "本"
+            else -> "件"
+        }
+        supportActionBar?.subtitle = "${p.items.size} $unit"
         adapter.rows = p.items.map { Row.Media(it, it.path?.let { path -> File(path).parentFile?.name }.orEmpty()) }
         emptyText.visibility = if (p.items.isEmpty()) View.VISIBLE else View.GONE
         if (playlistId == FavoriteMedia.PLAYLIST_ID) {

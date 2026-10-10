@@ -1,5 +1,6 @@
 package com.ryose.videoplayer
 
+import android.content.Intent
 import android.graphics.Color
 import android.media.AudioManager
 import android.os.Bundle
@@ -18,7 +19,11 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
+import androidx.lifecycle.lifecycleScope
 import com.google.android.material.card.MaterialCardView
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.videolan.libvlc.MediaPlayer
 
 /** 音楽の再生画面（ジャケット・曲名・再生操作） */
@@ -39,7 +44,10 @@ class AudioPlayerActivity : AppCompatActivity() {
     private lateinit var speedButton: TextView
 
     private var svc: PlaybackService? = null
-    private var pendingLoad: Triple<List<PlaylistItem>, Int, Boolean>? = null
+    /** 一覧などから開かれたときの Intent（再生するリストにするのは、つながってから裏のスレッドで） */
+    private var loadIntent: Intent? = null
+    /** サービスにつながったときの準備の番号（待っている間に次の準備が始まったら、古いほうは使わない） */
+    private var readyGeneration = 0
     private var userSeeking = false
     private var lengthMs = 0L
 
@@ -135,17 +143,17 @@ class AudioPlayerActivity : AppCompatActivity() {
         if (savedInstanceState == null) takeLoadFrom(intent)
     }
 
-    override fun onNewIntent(intent: android.content.Intent) {
+    override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         takeLoadFrom(intent)
         svc?.let { onServiceReady(it) }
     }
 
-    /** 一覧などから開かれた場合は、再生するリストを受け取っておく（通知から開かれた場合は何もしない） */
-    private fun takeLoadFrom(intent: android.content.Intent) {
-        if (intent.getBooleanExtra(PlaybackService.EXTRA_FROM_SESSION, false)) return
-        pendingLoad = playlistFromIntent(intent)
+    /** 一覧などから開かれた場合は、再生する Intent を受け取っておく（通知から開かれた場合は何もしない） */
+    private fun takeLoadFrom(intent: Intent) {
+        if (intent.safeBooleanExtra(PlaybackService.EXTRA_FROM_SESSION)) return
+        loadIntent = intent
     }
 
     override fun onStart() {
@@ -176,17 +184,30 @@ class AudioPlayerActivity : AppCompatActivity() {
         s.addListener(listener)
         // ネットワーク再生でログインや証明書の確認を求められたときにダイアログを出す
         s.setDialogCallbacks(dialogHandler)
-        pendingLoad?.let { (items, index, shuffle) ->
-            pendingLoad = null
-            s.load(items, index, shuffle)
-        }
-        // 再生サービスが OS に止められていたら（アプリが裏で終了させられたあとなど）、前回の曲を一時停止のまま用意し直す
-        if (s.currentItem == null) s.restoreLastSession(play = false, audioOnly = true)
-        if (s.currentItem == null) {
-            finish()
+        val li = loadIntent
+        val gen = ++readyGeneration
+        if (li == null && s.currentItem != null) {
+            refreshAll()
             return
         }
-        refreshAll()
+        // 再生するリストづくり（ContentProvider への問い合わせ）や前回の続きの読み込みは裏で行う
+        lifecycleScope.launch {
+            val load = li?.let { playlistFromIntentAsync(it) }
+            val saved = if (load == null && s.currentItem == null) {
+                withContext(Dispatchers.IO) { LastSession.load(applicationContext) }
+            } else null
+            // 待っている間に画面を離れた・別の曲が選ばれた
+            if (gen != readyGeneration || svc !== s) return@launch
+            if (loadIntent === li) loadIntent = null
+            load?.let { (items, index, shuffle) -> s.load(items, index, shuffle) }
+            // 再生サービスが OS に止められていたら（アプリが裏で終了させられたあとなど）、前回の曲を一時停止のまま用意し直す
+            if (s.currentItem == null) s.restoreLastSession(play = false, audioOnly = true, saved = saved)
+            if (s.currentItem == null) {
+                finish()
+                return@launch
+            }
+            refreshAll()
+        }
     }
 
     private fun refreshAll() {
@@ -236,6 +257,7 @@ class AudioPlayerActivity : AppCompatActivity() {
     private fun updatePlayButton() {
         val playing = svc?.isPlaying == true
         playButton.setImageResource(if (playing) R.drawable.ic_pause else R.drawable.ic_play)
+        playButton.contentDescription = getString(if (playing) R.string.player_pause else R.string.player_play)
     }
 
     private fun tint(button: ImageButton, on: Boolean) {
@@ -252,8 +274,24 @@ class AudioPlayerActivity : AppCompatActivity() {
         repeatButton.setImageResource(if (s.repeat == PlaybackService.Repeat.ONE) R.drawable.ic_repeat_one else R.drawable.ic_repeat)
         tint(repeatButton, s.repeat != PlaybackService.Repeat.OFF)
         tint(timerButton, s.sleepAt > 0 || s.sleepAtEnd)
+        // オン・オフなどの状態も読み上げる
+        ViewCompat.setStateDescription(shuffleButton, getString(if (s.shuffle) R.string.player_state_on else R.string.player_state_off))
+        ViewCompat.setStateDescription(
+            repeatButton,
+            getString(
+                when (s.repeat) {
+                    PlaybackService.Repeat.OFF -> R.string.player_state_off
+                    PlaybackService.Repeat.ALL -> R.string.player_repeat_all
+                    PlaybackService.Repeat.ONE -> R.string.player_repeat_one_track
+                }
+            ),
+        )
+        ViewCompat.setStateDescription(timerButton, PlayerDialogs.sleepLabel(s) ?: getString(R.string.player_state_off))
+        // 次が無いときは押せないようにする（薄くするだけでなく、読み上げでも「無効」と伝わるように）
+        nextButton.isEnabled = s.hasNext()
         nextButton.alpha = if (s.hasNext()) 1f else 0.4f
         speedButton.text = formatRate(s.rate)
+        speedButton.contentDescription = getString(R.string.player_speed_desc, formatRate(s.rate).removeSuffix("x"))
     }
 
     private fun showMoreMenu() {
@@ -288,7 +326,7 @@ class AudioPlayerActivity : AppCompatActivity() {
                 if (s.renderer != null) R.drawable.ic_cast_connected else R.drawable.ic_cast, "キャスト",
                 s.renderer?.let { "${it.displayName ?: it.name} で再生中" } ?: "テレビ・スピーカーで再生", active = s.renderer != null,
             ) { PlayerDialogs.showCast(this@AudioPlayerActivity, s) })
-            add(SheetItem(R.drawable.ic_settings, "設定") { startActivity(android.content.Intent(this@AudioPlayerActivity, SettingsActivity::class.java)) })
+            add(SheetItem(R.drawable.ic_settings, "設定") { startActivity(Intent(this@AudioPlayerActivity, SettingsActivity::class.java)) })
             add(SheetItem(R.drawable.ic_close, "再生を終了") { s.stopPlayback() })
         }
         ActionSheet.show(this, s.displayTitle(), items, s.displaySubtitle().ifEmpty { null })

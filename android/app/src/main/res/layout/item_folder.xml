@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:background="?attr/selectableItemBackground"
@@ -18,7 +19,7 @@
         android:padding="11dp"
         android:scaleType="fitCenter"
         android:src="@drawable/ic_folder"
-        android:tint="@color/accent" />
+        app:tint="@color/accent" />
 
     <LinearLayout
         android:layout_width="0dp"
@@ -46,4 +47,15 @@
             android:textColor="@color/text_muted"
             android:textSize="13sp" />
     </LinearLayout>
+
+    <!-- 「探しています…」の行で、探している最中だと分かるように -->
+    <com.google.android.material.progressindicator.CircularProgressIndicator
+        android:id="@+id/busy"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:indeterminate="true"
+        android:visibility="gone"
+        app:indicatorSize="20dp"
+        app:trackThickness="2dp" />
 </LinearLayout>

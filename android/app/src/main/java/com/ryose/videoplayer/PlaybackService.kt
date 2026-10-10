@@ -67,6 +67,22 @@ class PlaybackService : Service() {
         fun onPlaybackStopped() {}
         /** キャスト先（Chromecast など）の一覧が変わった */
         fun onRenderersChanged() {}
+        /**
+         * 再生できなかった（次へ進めないとき）。画面に表示したら true を返す。
+         * どの画面も表示しなければ、トーストを出して再生を終える
+         */
+        fun onPlaybackError(error: PlaybackError): Boolean = false
+    }
+
+    /** 再生できなかったときの知らせ（[reason] は「ファイルが見つかりません」などの短い理由） */
+    data class PlaybackError(val title: String, val reason: String)
+
+    /** 再生する前の準備（ファイルを開く・ログイン情報を読む）の結果。時間がかかることがあるので裏で行う */
+    private sealed class Source {
+        class Local(val path: String) : Source()
+        class Network(val options: List<String>) : Source()
+        class Fd(val pfd: ParcelFileDescriptor) : Source()
+        class Failed(val reason: String) : Source()
     }
 
     /** 曲の情報（音楽ファイルに埋め込まれたタイトル・アーティスト・ジャケット） */
@@ -169,8 +185,24 @@ class PlaybackService : Service() {
     private var errorStreak = 0
     private var wifiLock: WifiManager.WifiLock? = null
 
+    /** 再生を始めるたびに増える番号（裏での準備が終わる前に別の曲・動画に変わったら、古い準備の結果は捨てる） */
+    private var playGeneration = 0
+    /** 今の曲・動画を開く準備中（ファイルを開く・ログイン情報を読むなどを裏で行っている間） */
+    private var preparing = false
+    /** 準備が終わったら始める位置・一時停止で始めるか（準備中のシーク・一時停止はここに反映する） */
+    private var preparingStart = 0L
+    private var preparingPaused = false
+    val isPreparing: Boolean get() = preparing
+    /** 今の曲・動画で起きた、画面に表示中の再生エラー（再試行・別の曲で消える） */
+    var lastError: PlaybackError? = null
+        private set
+
     val currentItem: PlaylistItem? get() = items.getOrNull(index)
-    val isPlaying: Boolean get() = player.isPlaying
+    /** 再生中か（準備中は、準備が終わったら再生を始めるかどうか） */
+    val isPlaying: Boolean get() = if (preparing) !preparingPaused else player.isPlaying
+
+    /** 開き直すときの位置（準備中なら、これから始める位置） */
+    private fun reloadPosition(): Long = if (preparing) preparingStart else player.time.coerceAtLeast(0)
 
     // ---------- サービスのライフサイクル ----------
 
@@ -212,9 +244,32 @@ class PlaybackService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
-        // 再生サービスが一度止められていたら（通知・イヤホンのボタンから起こされた）、前回の続きを用意する
-        val resumes = action == ACTION_PLAY_PAUSE || action == ACTION_PLAY
-        val restored = currentItem == null && action in RESUMING_ACTIONS && restoreLastSession(play = resumes, evenIfStopped = true)
+        val foregroundStart = runCatching { intent?.getBooleanExtra(EXTRA_FOREGROUND, false) == true }.getOrDefault(false)
+        // startForegroundService で起こされたときは、何よりも先に常駐を始める（時間内に始めないとアプリが落ちる）
+        if (foregroundStart && !startForegroundIfNeeded() && currentItem == null) {
+            // 常駐を始められなかった：再生するものも無いので、そのまま終わる
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        if (currentItem == null && action in RESUMING_ACTIONS) {
+            // 再生サービスが一度止められていたら（通知・イヤホンのボタンから起こされた）、前回の続きを用意する。
+            // 前回の再生キューはファイルから読むので裏で読み、読み終わってからボタンの操作をする
+            scope.launch {
+                val saved = withContext(Dispatchers.IO) { LastSession.load(this@PlaybackService) }
+                val resumes = action == ACTION_PLAY_PAUSE || action == ACTION_PLAY
+                val restored = currentItem == null && restoreLastSession(play = resumes, evenIfStopped = true, saved = saved)
+                handleStartAction(intent, action, restored)
+                finishStartCommand(foregroundStart)
+            }
+            return START_NOT_STICKY
+        }
+        handleStartAction(intent, action, restored = false)
+        finishStartCommand(foregroundStart)
+        return START_NOT_STICKY
+    }
+
+    /** 通知・イヤホンのボタンや一覧の画面から頼まれた操作 */
+    private fun handleStartAction(intent: Intent?, action: String?, restored: Boolean) {
         when (action) {
             // 前回の続きを読み込み直したときは、もう再生が始まっている
             ACTION_PLAY_PAUSE -> if (!restored) togglePlay()
@@ -223,7 +278,7 @@ class PlaybackService : Service() {
             ACTION_PREVIOUS -> previous()
             ACTION_STOP -> stopPlayback()
             ACTION_ENQUEUE, ACTION_PLAY_NEXT -> {
-                val list = intent?.getStringExtra(EXTRA_ITEMS)?.let { json ->
+                val list = runCatching { intent?.getStringExtra(EXTRA_ITEMS) }.getOrNull()?.let { json ->
                     runCatching {
                         val arr = org.json.JSONArray(json)
                         (0 until arr.length()).map { PlaylistItem.fromJson(arr.getJSONObject(it)) }
@@ -237,23 +292,24 @@ class PlaybackService : Service() {
                 }
             }
             // 一時停止中の通知をスワイプで消した：画面で見ていなければ終了する
-            ACTION_DISMISS -> if (!videoUiAttached && !player.isPlaying) stopPlayback()
+            ACTION_DISMISS -> if (!videoUiAttached && !isPlaying) stopPlayback()
         }
-        if (intent?.getBooleanExtra(EXTRA_FOREGROUND, false) == true) {
-            // startForegroundService で起こされたときは、必ず常駐を始める（始めないとアプリが落ちる）
-            startForegroundIfNeeded()
+    }
+
+    private fun finishStartCommand(foregroundStart: Boolean) {
+        if (foregroundStart) {
+            // 常駐は始めてある。前回の続きが無くて再生するものが無ければ終わる
             if (currentItem == null) stopPlayback()
         } else if (currentItem == null && listeners.isEmpty()) {
             // 何も再生するものが無い：起こされただけなので終わる
             stopSelf()
         }
-        return START_NOT_STICKY
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
         // 最近使ったアプリから消されたとき、再生中でなければ終了する
-        if (!player.isPlaying) stopPlayback()
+        if (!isPlaying) stopPlayback()
     }
 
     override fun onDestroy() {
@@ -334,7 +390,7 @@ class PlaybackService : Service() {
     fun recreateEngineKeepingItem(): Boolean {
         // キャスト中は作り直さない（キャストが切れてしまうので）
         if (currentItem == null || videoUiAttached || renderer != null || !engineOutdated()) return false
-        pendingReplay = player.time.coerceAtLeast(0) to player.isPlaying
+        pendingReplay = reloadPosition() to isPlaying
         rebuildEngine()
         return true
     }
@@ -397,49 +453,99 @@ class PlaybackService : Service() {
 
     /**
      * 前回の再生キューを読み込み直す（再生サービスが OS に止められたあとなど）。
-     * [videoOnly]・[audioOnly] で、前回が動画（音楽）だったときだけに限る。読み込めたら true
+     * [videoOnly]・[audioOnly] で、前回が動画（音楽）だったときだけに限る。読み込めたら true。
+     * [saved] は裏のスレッドで読んでおいたもの（省くとここでファイルを読む）
      */
     fun restoreLastSession(
         play: Boolean, videoOnly: Boolean = false, audioOnly: Boolean = false, evenIfStopped: Boolean = false,
+        saved: LastSession.Saved? = LastSession.load(this),
     ): Boolean {
         if (currentItem != null) return true
-        val saved = LastSession.load(this) ?: return false
-        val cur = saved.current ?: return false
+        val s = saved ?: return false
         // わざと終わらせた再生は、画面に戻っただけでは元に戻さない（ボタンで再生を頼まれたときは戻す）
-        if (saved.stopped && !evenIfStopped) return false
-        if (videoOnly && cur.isAudio) return false
-        if (audioOnly && !cur.isAudio) return false
-        load(saved.items, saved.index, saved.shuffle, paused = !play, advance = saved.advance, presetOrder = saved.order)
+        if (!s.restorable(videoOnly = videoOnly, audioOnly = audioOnly, evenIfStopped = evenIfStopped)) return false
+        load(s.items, s.index, s.shuffle, paused = !play, advance = s.advance, presetOrder = s.order)
         return currentItem != null
     }
 
+    /**
+     * 今の曲・動画を開いて再生を始める。
+     * ファイルを開く・ログイン情報を読むなどの時間がかかる準備は裏で行い、終わってから VLC に渡す
+     * （準備中のシーク・一時停止は [preparingStart]・[preparingPaused] に反映される）
+     */
     private fun playCurrent(startMs: Long, paused: Boolean) {
         val item = currentItem ?: return
+        val gen = ++playGeneration
+        preparing = true
+        preparingStart = startMs.coerceAtLeast(0)
+        preparingPaused = paused
+        // 前の曲・動画は止めておく（準備の間に終わって次へ進んだり、違う曲の位置として記録したりしないように）
+        player.stop()
         closeFd()
         lengthMs = 0
         meta = null
         videoTrackDisabled = false
         startedWithoutVideo = false
         errorHandled = false
+        lastError = null
         abA = -1
         abB = -1
 
-        val media = try {
-            val path = item.path
+        // 履歴は動画だけ（音楽を聴くと動画の履歴が押し出されてしまうので）
+        if (!item.isAudio) scope.launch(Dispatchers.IO) { history.add(item) }
+        LastSession.save(this, items, index, shuffle, order, autoAdvance)
+        loadMeta(item, gen)
+        updateSession()
+        dispatch { it.onItemChanged() }
+
+        scope.launch {
+            val source = withContext(Dispatchers.IO) { openSource(item) }
+            if (gen != playGeneration) {
+                // 準備している間に別の曲・動画に変わった（止められた）
+                (source as? Source.Fd)?.let { runCatching { it.pfd.close() } }
+                return@launch
+            }
+            startMedia(item, gen, source)
+        }
+    }
+
+    /** ファイルを開く準備（裏のスレッドで呼ぶ） */
+    private fun openSource(item: PlaylistItem): Source {
+        val path = item.path
+        return try {
             when {
-                path != null && File(path).canRead() -> Media(libVLC, path)
-                item.isNetwork -> Media(libVLC, item.uri).also { m ->
-                    // 登録したサーバーなら、ログイン情報を渡す
-                    ServerStore(this).optionsFor(item.uri).forEach { m.addOption(it) }
+                path != null && File(path).canRead() -> Source.Local(path)
+                // 登録したサーバーなら、ログイン情報を渡す（パスワードを元に戻すのは重い）
+                item.isNetwork -> Source.Network(ServerStore(this).optionsFor(item.uri))
+                else -> Source.Fd(contentResolver.openFileDescriptor(item.uri, "r") ?: throw FileNotFoundException())
+            }
+        } catch (e: Exception) {
+            Source.Failed(openErrorReason(item, e))
+        }
+    }
+
+    /** 準備ができた曲・動画を VLC に渡して再生を始める */
+    private fun startMedia(item: PlaylistItem, gen: Int, source: Source) {
+        preparing = false
+        val startMs = preparingStart
+        val paused = preparingPaused
+        val media = try {
+            when (source) {
+                is Source.Local -> Media(libVLC, source.path)
+                is Source.Network -> Media(libVLC, item.uri).also { m -> source.options.forEach { m.addOption(it) } }
+                is Source.Fd -> {
+                    openFd = source.pfd
+                    Media(libVLC, source.pfd.fileDescriptor)
                 }
-                else -> {
-                    val pfd = contentResolver.openFileDescriptor(item.uri, "r") ?: throw FileNotFoundException()
-                    openFd = pfd
-                    Media(libVLC, pfd.fileDescriptor)
+                is Source.Failed -> {
+                    onPlaybackError(source.reason)
+                    updateSession()
+                    return
                 }
             }
         } catch (_: Exception) {
-            onPlaybackError("ファイルを開けませんでした：${item.title}")
+            onPlaybackError(REASON_UNREADABLE)
+            updateSession()
             return
         }
         media.setHWDecoderEnabled(hwDecodingFor(item), false)
@@ -450,6 +556,9 @@ class PlaybackService : Service() {
         }
         if (startMs > 0) media.addOption(":start-time=${startMs / 1000.0}")
         if (paused) media.addOption(":start-paused")
+        // 準備している間に画面を離れた・戻ってきた場合もあるので、映像を出すかどうかは今の状態で決める
+        videoTrackDisabled = false
+        startedWithoutVideo = false
         if (!item.isAudio && !videoUiAttached && renderer == null) {
             media.addOption(":no-video")
             videoTrackDisabled = true
@@ -459,13 +568,32 @@ class PlaybackService : Service() {
         media.release()
         player.play()
 
-        // 履歴は動画だけ（音楽を聴くと動画の履歴が押し出されてしまうので）
-        if (!item.isAudio) scope.launch(Dispatchers.IO) { history.add(item) }
-        LastSession.save(this, items, index, shuffle, order, autoAdvance)
-        loadSubtitles(item)
-        loadMeta(item)
+        loadSubtitles(item, gen)
         updateSession()
-        dispatch { it.onItemChanged() }
+    }
+
+    /** ファイルを開けなかった理由 */
+    private fun openErrorReason(item: PlaylistItem, e: Exception?): String {
+        val path = item.path
+        return when {
+            item.isNetwork -> REASON_NETWORK
+            path != null && !File(path).exists() -> REASON_MISSING
+            path != null -> REASON_UNREADABLE
+            e is FileNotFoundException -> REASON_MISSING
+            else -> REASON_UNREADABLE
+        }
+    }
+
+    /** VLC が再生できなかった理由（開けたあとでのエラー） */
+    private fun playErrorReason(item: PlaylistItem?): String {
+        val path = item?.path
+        return when {
+            item == null -> REASON_FORMAT
+            item.isNetwork -> REASON_NETWORK
+            // SD カードが抜かれた・再生中に消されたなど
+            path != null && !File(path).exists() -> REASON_MISSING
+            else -> REASON_FORMAT
+        }
     }
 
     private fun closeFd() {
@@ -474,24 +602,44 @@ class PlaybackService : Service() {
     }
 
     fun togglePlay() {
-        if (player.isPlaying) pause() else play()
+        if (isPlaying) pause() else play()
     }
 
     fun play() {
-        if (currentItem != null) player.play()
+        when {
+            currentItem == null -> {}
+            // 再生できなかった曲・動画は、開き直してもう一度試す
+            lastError != null -> retry()
+            // 準備中：準備が終わったら再生を始める（今の VLC には前の曲が残っているので触らない）
+            preparing -> preparingPaused = false
+            else -> player.play()
+        }
     }
 
     fun pause() {
+        if (preparing) preparingPaused = true
         player.pause()
+    }
+
+    /** 再生できなかった曲・動画を、もう一度開き直す（続きから再生する位置があればそこから） */
+    fun retry() {
+        val item = currentItem ?: return
+        errorStreak = 0
+        playCurrent(startPositionOf(item), paused = false)
     }
 
     fun seekTo(ms: Long) {
         val max = if (lengthMs > 0) lengthMs else Long.MAX_VALUE
+        if (preparing) {
+            // 準備が終わったら、この位置から始める
+            preparingStart = ms.coerceIn(0, max)
+            return
+        }
         player.setTime(ms.coerceIn(0, max))
         updateSession()
     }
 
-    fun seekBy(deltaMs: Long) = seekTo(player.time.coerceAtLeast(0) + deltaMs)
+    fun seekBy(deltaMs: Long) = seekTo(reloadPosition() + deltaMs)
 
     fun setPlaybackRate(r: Float) {
         rate = r
@@ -507,6 +655,7 @@ class PlaybackService : Service() {
         if (currentItem == null) return
         // 電話などで一時停止していた場合も、画面を離れたら勝手に再開しない
         pausedByFocus = false
+        if (preparing) preparingPaused = true
         if (player.isPlaying) player.pause()
         savePosition()
         setVideoEnabled(false)
@@ -516,6 +665,8 @@ class PlaybackService : Service() {
     /** 動画の画面に戻ってきたとき：止めていた映像を戻す */
     fun restoreVideo() {
         if (currentItem == null || currentItem?.isAudio == true) return
+        // 準備中：準備が終わったときに、画面があれば映像も出す
+        if (preparing) return
         if (startedWithoutVideo) {
             // 映像なしで開いた動画は、同じ位置から開き直して映像を出す
             val t = player.time.coerceAtLeast(0)
@@ -532,6 +683,10 @@ class PlaybackService : Service() {
     fun stopPlayback(byUser: Boolean = true) {
         savePosition()
         if (byUser && currentItem != null) LastSession.markStopped(this)
+        // 準備中の曲・動画があれば、その結果は使わない
+        playGeneration++
+        preparing = false
+        lastError = null
         player.stop()
         if (renderer != null) {
             player.setRenderer(null)
@@ -757,7 +912,7 @@ class PlaybackService : Service() {
     fun castTo(item: RendererItem?) {
         if (item == renderer) return
         val active = currentItem != null
-        val position = player.time.coerceAtLeast(0)
+        val position = reloadPosition()
         savePosition()
         renderer?.release()
         renderer = item?.also { it.retain() }
@@ -780,8 +935,8 @@ class PlaybackService : Service() {
         val item = currentItem ?: return false
         val hw = !hwDecodingFor(item)
         hwOverrides[item.key] = hw
-        val t = player.time.coerceAtLeast(0)
-        val wasPlaying = player.isPlaying
+        val t = reloadPosition()
+        val wasPlaying = isPlaying
         playCurrent(t, paused = !wasPlaying)
         return hw
     }
@@ -895,6 +1050,8 @@ class PlaybackService : Service() {
     }
 
     private fun onPlayerEvent(e: MediaPlayer.Event) {
+        // 準備中に届いた、止めた前の曲・動画の「終わった」「エラー」は無視する（次の曲まで飛ばさないように）
+        if (preparing && (e.type == MediaPlayer.Event.EndReached || e.type == MediaPlayer.Event.EncounteredError)) return
         when (e.type) {
             MediaPlayer.Event.Playing -> {
                 if (!requestFocus()) {
@@ -924,6 +1081,8 @@ class PlaybackService : Service() {
             MediaPlayer.Event.Stopped -> {
                 handler.removeCallbacks(saveTask)
                 releaseWifiLock()
+                // 次の曲・動画を開く準備のために止めたとき：画面には「止まった」と伝えない（読み込み中の表示が消えないように）
+                if (preparing) return
                 updateSession()
             }
             MediaPlayer.Event.LengthChanged -> setLength(e.lengthChanged)
@@ -940,23 +1099,45 @@ class PlaybackService : Service() {
             }
             MediaPlayer.Event.EncounteredError -> {
                 dispatch { it.onPlayerEvent(e) }
-                onPlaybackError("再生できませんでした：${currentItem?.title.orEmpty()}")
+                onPlaybackError(playErrorReason(currentItem))
                 return
             }
         }
         dispatch { it.onPlayerEvent(e) }
     }
 
-    /** 開けない・再生できないファイルは飛ばして次へ進む（次が無い、または全部だめなら終了） */
-    private fun onPlaybackError(message: String) {
+    /**
+     * 開けない・再生できないファイルは飛ばして次へ進む。
+     * 次が無い（または全部だめな）ときは、画面（動画の画面）に理由を表示してもらい、表示できる画面が無ければ終了する
+     */
+    private fun onPlaybackError(reason: String) {
         if (errorHandled) return
         errorHandled = true
         errorStreak++
-        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
         val item = currentItem
+        val gen = playGeneration
         handler.post {
+            // 待っている間に別の曲・動画に変わった・止められた
+            if (gen != playGeneration || currentItem != item) return@post
+            val title = item?.title.orEmpty()
             // 終わったら止まる設定のときは、関係ない次の動画へ飛ばない
-            if (hasNext() && errorStreak < items.size && (autoAdvance || item?.isAudio == true)) next() else stopPlayback()
+            if (hasNext() && errorStreak < items.size && (autoAdvance || item?.isAudio == true)) {
+                Toast.makeText(this, "再生できなかったため、次へ進みます：$title", Toast.LENGTH_SHORT).show()
+                next()
+                return@post
+            }
+            val error = PlaybackError(title, reason)
+            lastError = error
+            // すべての画面に知らせる（1 つでも表示したら、再生キューを残したまま再試行を待つ）
+            val shown = listeners.toList().fold(false) { acc, l -> l.onPlaybackError(error) || acc }
+            if (shown) {
+                updateSession()
+                // 画面を離れたまま放っておかれたら終わる
+                scheduleIdleStop()
+            } else {
+                Toast.makeText(this, "再生できませんでした：$title\n$reason", Toast.LENGTH_LONG).show()
+                stopPlayback()
+            }
         }
     }
 
@@ -974,6 +1155,8 @@ class PlaybackService : Service() {
 
     fun savePosition() {
         val item = currentItem ?: return
+        // 準備中は VLC に前の曲・動画が残っているので記録しない
+        if (preparing) return
         val len = if (lengthMs > 0) lengthMs else player.length
         val t = player.time
         if (t < 0 || len <= 0) return
@@ -993,10 +1176,11 @@ class PlaybackService : Service() {
     fun setSubtitleCharset(name: String?) {
         val item = currentItem ?: return
         if (name == null) subtitleCharsets.remove(item.key) else subtitleCharsets[item.key] = name
-        playCurrent(player.time.coerceAtLeast(0), paused = !player.isPlaying)
+        playCurrent(reloadPosition(), paused = !isPlaying)
     }
 
-    private fun loadSubtitles(item: PlaylistItem) {
+    /** 字幕を VLC に渡す（[gen] は開いたときの番号。同じ動画を開き直した場合も、古い分は渡さない） */
+    private fun loadSubtitles(item: PlaylistItem, gen: Int) {
         if (item.isAudio) return
         val manual = addedSubtitles[item.key].orEmpty().toList()
         val path = item.path
@@ -1005,7 +1189,7 @@ class PlaybackService : Service() {
             val auto = if (path == null) emptyList() else withContext(Dispatchers.IO) {
                 Subtitles.findFor(path).map { Subtitles.prepare(this@PlaybackService, it, charset) }
             }
-            if (currentItem != item) return@launch
+            if (gen != playGeneration) return@launch
             (manual + auto).forEachIndexed { i, f ->
                 player.addSlave(IMedia.Slave.Type.Subtitle, Uri.fromFile(f), i == 0)
             }
@@ -1020,12 +1204,12 @@ class PlaybackService : Service() {
 
     // ---------- 曲の情報・ジャケット ----------
 
-    private fun loadMeta(item: PlaylistItem) {
+    private fun loadMeta(item: PlaylistItem, gen: Int) {
         // ネットワーク上のファイルは読み込みに時間がかかるので調べない
         if (item.isNetwork) return
         scope.launch {
             val m = withContext(Dispatchers.IO) { readMeta(item) }
-            if (currentItem != item) return@launch
+            if (gen != playGeneration) return@launch
             meta = m
             updateSession()
             dispatch { it.onItemChanged() }
@@ -1083,7 +1267,7 @@ class PlaybackService : Service() {
                     AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
                         // 通話中にうっかり再生しても、もう一度フォーカスを求めて断られるようにする
                         hasFocus = false
-                        if (player.isPlaying) {
+                        if (isPlaying) {
                             pausedByFocus = true
                             pause()
                         }
@@ -1149,8 +1333,13 @@ class PlaybackService : Service() {
                     PlaybackStateCompat.ACTION_STOP
             )
             .setState(
-                if (playing) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED,
-                player.time.coerceAtLeast(0),
+                when {
+                    // ファイルを開く準備中
+                    preparing -> PlaybackStateCompat.STATE_BUFFERING
+                    playing -> PlaybackStateCompat.STATE_PLAYING
+                    else -> PlaybackStateCompat.STATE_PAUSED
+                },
+                reloadPosition(),
                 if (playing) rate else 0f,
             )
             .build()
@@ -1178,12 +1367,13 @@ class PlaybackService : Service() {
     private var lastMetaKey: List<Any?>? = null
     private var lastNotifiedPlaying: Boolean? = null
 
-    private fun startForegroundIfNeeded() {
+    /** 常駐（通知を出したままの再生）を始める。常駐できたら true */
+    private fun startForegroundIfNeeded(): Boolean {
         if (foreground) {
             notifyNotification()
-            return
+            return true
         }
-        try {
+        return try {
             ServiceCompat.startForeground(
                 this, NOTIFICATION_ID, buildNotification(),
                 if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK else 0,
@@ -1191,9 +1381,11 @@ class PlaybackService : Service() {
             foreground = true
             notificationShown = true
             lastNotifiedPlaying = player.isPlaying
+            true
         } catch (_: Exception) {
             // バックグラウンドからの開始が制限された場合など。通知だけ更新して再生は続ける
             notifyNotification()
+            false
         }
     }
 
@@ -1203,7 +1395,7 @@ class PlaybackService : Service() {
      */
     private val idleStopTask = object : Runnable {
         override fun run() {
-            if (player.isPlaying) return
+            if (isPlaying) return
             // 画面で見ている間や、電話で一時停止している間は待ち続ける
             if (videoUiAttached || listeners.isNotEmpty() || pausedByFocus) {
                 handler.postDelayed(this, IDLE_STOP_MS)
@@ -1287,6 +1479,11 @@ class PlaybackService : Service() {
         const val EXTRA_FOREGROUND = "foreground"
         /** 一時停止のまま、この時間がたったら終わる */
         private const val IDLE_STOP_MS = 30 * 60_000L
+        /** 再生できなかった理由（画面・トーストに出す） */
+        private const val REASON_MISSING = "ファイルが見つかりません。移動・削除されたか、SD カードが外されている可能性があります"
+        private const val REASON_UNREADABLE = "ファイルを読み込めませんでした。読み込みが許可されていない可能性があります"
+        private const val REASON_NETWORK = "サーバーに接続できませんでした。ネットワークの状態や、NAS・サーバーが動いているか確認してください"
+        private const val REASON_FORMAT = "この形式は再生できない可能性があります"
         private const val CHANNEL_ID = "playback"
         private const val NOTIFICATION_ID = 1
         const val ACTION_ENQUEUE = "com.ryose.videoplayer.ENQUEUE"

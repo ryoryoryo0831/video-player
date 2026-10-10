@@ -10,4 +10,31 @@
     <color name="text_muted">#5F6676</color>
     <!-- アイコンの丸い背景（アクセント色を薄く） -->
     <color name="accent_soft">#1F2F6FE8</color>
+    <!--
+      Material 3 の色の役割（ボタン・スイッチ・チップ・下のタブの選択中の印・ダイアログなど）。
+      指定しないと Material 3 の初期値（紫）になってしまうので、アクセントの青に合わせて全部決めておく
+    -->
+    <color name="role_on_primary">#FFFFFF</color>
+    <color name="role_primary_container">#D9E2FF</color>
+    <color name="role_on_primary_container">#001A41</color>
+    <color name="role_inverse_primary">#B0C6FF</color>
+    <color name="role_secondary">#565E71</color>
+    <color name="role_on_secondary">#FFFFFF</color>
+    <color name="role_secondary_container">#DAE2F9</color>
+    <color name="role_on_secondary_container">#131C2B</color>
+    <color name="role_tertiary">#006A6A</color>
+    <color name="role_on_tertiary">#FFFFFF</color>
+    <color name="role_tertiary_container">#9CF1F0</color>
+    <color name="role_on_tertiary_container">#002020</color>
+    <color name="role_outline">#757C8C</color>
+    <color name="role_outline_variant">#C4C8D2</color>
+    <color name="role_surface_dim">#D9DCE2</color>
+    <color name="role_surface_bright">#FFFFFF</color>
+    <color name="role_surface_container_lowest">#FFFFFF</color>
+    <color name="role_surface_container_low">#F7F8FB</color>
+    <color name="role_surface_container">#F1F3F7</color>
+    <color name="role_surface_container_high">#EBEEF3</color>
+    <color name="role_surface_container_highest">#E5E8EE</color>
+    <color name="role_inverse_surface">#2E3138</color>
+    <color name="role_inverse_on_surface">#EFF0F5</color>
 </resources>

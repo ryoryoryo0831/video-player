@@ -1,5 +1,8 @@
 package com.ryose.videoplayer
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Parcelable
 import android.text.format.Formatter
@@ -9,6 +12,7 @@ import android.view.MenuItem
 import android.view.View
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.widget.SearchView
+import androidx.core.content.ContextCompat
 import androidx.core.view.MenuProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -42,6 +46,10 @@ class VideosFragment : BaseListFragment() {
     private var savedScroll: Parcelable? = null
     private lateinit var allChip: Chip
     private lateinit var folderChip: Chip
+    /** 「一部の動画だけを表示しています」の帯 */
+    private lateinit var limitedBanner: View
+    /** 「選び直す」で許可の画面を出したので、戻ってきたら読み込み直す */
+    private var reloadOnResume = false
 
     private val backCallback = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() = closeFolder()
@@ -79,6 +87,23 @@ class VideosFragment : BaseListFragment() {
         chips.addView(allChip)
         chips.addView(folderChip)
         updateChips()
+
+        limitedBanner = view.findViewById(R.id.limitedBanner)
+        view.findViewById<View>(R.id.limitedReselect).setOnClickListener {
+            // もう一度許可を求めると、Android が見せる動画を選び直す画面を出す
+            reloadOnResume = true
+            (activity as? MainActivity)?.requestMediaAccess()
+        }
+    }
+
+    /**
+     * Android 14 以降で「選択した写真と動画」だけを許可されているか
+     * （「すべて許可」や「すべてのファイルへのアクセス」があれば false）
+     */
+    private fun isLimitedAccess(ctx: android.content.Context): Boolean {
+        if (Build.VERSION.SDK_INT < 34 || ctx.hasStorageAccess()) return false
+        fun granted(p: String) = ContextCompat.checkSelfPermission(ctx, p) == PackageManager.PERMISSION_GRANTED
+        return granted(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) && !granted(Manifest.permission.READ_MEDIA_VIDEO)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -96,7 +121,12 @@ class VideosFragment : BaseListFragment() {
         super.onResume()
         applyLayout()
         updateChips()
-        if (!loaded || requireContext().hasMediaAccess(audio = false) != loadedWithAccess) load() else applyFilter()
+        if (!loaded || reloadOnResume || requireContext().hasMediaAccess(audio = false) != loadedWithAccess) {
+            reloadOnResume = false
+            load()
+        } else {
+            applyFilter()
+        }
     }
 
     override fun onPause() {
@@ -136,6 +166,7 @@ class VideosFragment : BaseListFragment() {
     private fun load() {
         val ctx = requireContext()
         loadedWithAccess = ctx.hasMediaAccess(audio = false)
+        limitedBanner.visibility = if (loadedWithAccess && isLimitedAccess(ctx)) View.VISIBLE else View.GONE
         if (!loadedWithAccess) {
             showNeedPermission()
             return
@@ -172,7 +203,8 @@ class VideosFragment : BaseListFragment() {
             val rows = withContext(Dispatchers.Default) { buildRows(ctx, all, query, sort, folder, byFolder) }
             shownCount = rows.size
             backCallback.isEnabled = isResumed && folder != null
-            showRows(rows, getString(R.string.no_videos))
+            // 動画が 1 本も無いのか、検索に当てはまるものが無いのかを分けて伝える
+            showRows(rows, if (query.isBlank() || all.isEmpty()) getString(R.string.no_videos) else "「$query」に一致する動画はありません。")
             onShown?.invoke()
         }
     }
