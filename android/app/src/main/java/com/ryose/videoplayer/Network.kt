@@ -81,19 +81,28 @@ data class Server(
 class ServerStore(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("servers", Context.MODE_PRIVATE)
 
-    /** パスワードは暗号化して保存し、読み出すときに元に戻す */
-    fun all(): List<Server> = try {
+    /**
+     * パスワードは暗号化して保存し、読み出すときに元に戻す。
+     * 元に戻す処理は重いので、一度読んだらアプリを閉じるまで覚えておく（再生のたびに全部を戻さないように）
+     */
+    fun all(): List<Server> = cache ?: try {
         val arr = JSONArray(prefs.getString("list", "[]"))
         val stored = (0 until arr.length()).map { Server.fromJson(arr.getJSONObject(it)) }
         val list = stored.map { it.copy(password = Secrets.decrypt(it.password)) }
         // 以前のバージョンで暗号化せずに保存したパスワードがあれば、暗号化して保存し直す
         if (stored.any { it.password.isNotEmpty() && !Secrets.isEncrypted(it.password) }) save(list)
+        cache = list
         list
     } catch (_: Exception) {
         emptyList()
     }
 
+    private companion object {
+        @Volatile var cache: List<Server>? = null
+    }
+
     private fun save(list: List<Server>) {
+        cache = list
         val arr = JSONArray()
         list.forEach { s ->
             // 暗号化できない（鍵保管庫が使えない）場合は、パスワードを保存しない

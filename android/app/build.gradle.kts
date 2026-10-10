@@ -11,6 +11,13 @@ val buildNumber = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
 // 署名鍵は GitHub Secrets から渡す。無い場合はデバッグ鍵で署名する
 val keystoreFile = System.getenv("KEYSTORE_FILE")?.let { file(it) }?.takeIf { it.exists() }
 val keystorePassword = System.getenv("KEYSTORE_PASSWORD")
+if (keystoreFile == null || keystorePassword == null) {
+    // 黙ってデバッグ鍵で署名すると、上書きインストールできない APK ができてしまうので知らせる
+    logger.warn(
+        "警告：署名鍵（KEYSTORE_FILE・KEYSTORE_PASSWORD）が無いため、デバッグ鍵で署名します。" +
+            "この APK は今入っている Orbit に上書きインストールできません（入れ直すと履歴などが消えます）。"
+    )
+}
 
 android {
     namespace = "com.ryose.videoplayer"

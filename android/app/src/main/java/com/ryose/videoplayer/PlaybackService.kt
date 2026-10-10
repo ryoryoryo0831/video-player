@@ -522,6 +522,8 @@ class PlaybackService : Service() {
         handler.removeCallbacks(saveTask)
         handler.removeCallbacks(idleStopTask)
         session.isActive = false
+        lastMetaKey = null
+        lastNotifiedPlaying = null
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         NotificationManagerCompat.from(this).cancel(NOTIFICATION_ID)
         foreground = false
@@ -986,7 +988,7 @@ class PlaybackService : Service() {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         var sample = 1
-        while (bounds.outWidth / (sample * 2) >= 512 && bounds.outHeight / (sample * 2) >= 512) sample *= 2
+        while (bounds.outWidth / sample > 512 || bounds.outHeight / sample > 512) sample *= 2
         return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
     }
 
@@ -1086,18 +1088,28 @@ class PlaybackService : Service() {
             )
             .build()
         session.setPlaybackState(state)
-        session.setMetadata(
-            MediaMetadataCompat.Builder()
-                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, meta?.title ?: item.title)
-                .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, meta?.artist.orEmpty())
-                .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, meta?.album.orEmpty())
-                .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, lengthMs)
-                .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, meta?.art)
-                .build()
-        )
+        // 曲の情報や通知は、変わったときだけ作り直す（シークのたびにジャケット画像ごと作り直すと重い）
+        val metaKey = listOf(item.key, meta?.title, meta?.artist, meta?.album, lengthMs, System.identityHashCode(meta?.art))
+        val metaChanged = metaKey != lastMetaKey
+        if (metaChanged) {
+            lastMetaKey = metaKey
+            session.setMetadata(
+                MediaMetadataCompat.Builder()
+                    .putString(MediaMetadataCompat.METADATA_KEY_TITLE, meta?.title ?: item.title)
+                    .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, meta?.artist.orEmpty())
+                    .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, meta?.album.orEmpty())
+                    .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, lengthMs)
+                    .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, meta?.art)
+                    .build()
+            )
+        }
         session.isActive = true
-        if (notificationShown) notifyNotification()
+        if (notificationShown && (metaChanged || playing != lastNotifiedPlaying)) notifyNotification()
     }
+
+    /** 最後に MediaSession に渡した曲の情報・通知に出した再生状態（変わったときだけ作り直すため） */
+    private var lastMetaKey: List<Any?>? = null
+    private var lastNotifiedPlaying: Boolean? = null
 
     private fun startForegroundIfNeeded() {
         if (foreground) {
@@ -1111,6 +1123,7 @@ class PlaybackService : Service() {
             )
             foreground = true
             notificationShown = true
+            lastNotifiedPlaying = player.isPlaying
         } catch (_: Exception) {
             // バックグラウンドからの開始が制限された場合など。通知だけ更新して再生は続ける
             notifyNotification()
@@ -1143,6 +1156,7 @@ class PlaybackService : Service() {
         try {
             NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, buildNotification())
             notificationShown = true
+            lastNotifiedPlaying = player.isPlaying
         } catch (_: SecurityException) {
         }
     }

@@ -7,6 +7,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
+import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.RecyclerView
 import coil.dispose
 import coil.load
@@ -40,13 +41,37 @@ class MediaAdapter(
 
     private var data = mutableListOf<Row>()
 
+    /**
+     * 一覧の中身。変わった行だけ描き直す（再生から戻るたびに全部の行とサムネイルを描き直さないように）
+     */
     var rows: List<Row>
         get() = data
         @SuppressLint("NotifyDataSetChanged")
         set(value) {
-            data = value.toMutableList()
-            notifyDataSetChanged()
+            val old = data
+            val new = value.toMutableList()
+            data = new
+            // お気に入りの ★ が変わったときや、大きすぎて比べるのに時間がかかるときは全部描き直す
+            if (favoritesChanged || old.isEmpty() || new.isEmpty() || old.size.toLong() * new.size > 4_000_000L) {
+                favoritesChanged = false
+                notifyDataSetChanged()
+                return
+            }
+            DiffUtil.calculateDiff(object : DiffUtil.Callback() {
+                override fun getOldListSize() = old.size
+                override fun getNewListSize() = new.size
+                override fun areItemsTheSame(o: Int, n: Int) = identity(old[o]) == identity(new[n])
+                override fun areContentsTheSame(o: Int, n: Int) = old[o] == new[n]
+            }).dispatchUpdatesTo(this)
         }
+
+    private fun identity(row: Row): String = when (row) {
+        is Row.Folder -> "F|${row.id ?: row.dir?.path ?: row.name}"
+        is Row.Media -> "M|${row.item.key}"
+        is Row.Header -> "H|${row.title}"
+    }
+
+    private var favoritesChanged = false
 
     /** グリッド表示（動画の行を大きなサムネイルのマスで表示する） */
     var grid = false
@@ -59,6 +84,10 @@ class MediaAdapter(
 
     /** お気に入りの動画・曲（行に ★ を付ける） */
     var favoriteKeys: Set<String> = emptySet()
+        set(value) {
+            if (value != field) favoritesChanged = true
+            field = value
+        }
 
     /** 設定するとつまみを表示し、触ったときに呼ばれる（プレイリストの並べ替え用） */
     var dragListener: ((RecyclerView.ViewHolder) -> Unit)? = null

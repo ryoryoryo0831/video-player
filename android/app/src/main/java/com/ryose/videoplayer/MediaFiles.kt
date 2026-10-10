@@ -54,11 +54,28 @@ object MediaFiles {
         val children = visibleChildren(dir)
         val folders = children.filter { it.isDirectory }
             .sortedWith(compareBy(NaturalOrder) { it.name })
-            .map { d ->
-                val sub = visibleChildren(d)
-                Folder(d, sub.count { it.isDirectory }, sub.count { isVideo(it) }, sub.count { isAudio(it) })
-            }
+            .map { d -> folderInfo(d) }
         return Listing(folders, mediaIn(context, dir, children))
+    }
+
+    /**
+     * サブフォルダの中身の数。フォルダの中身が変わっていなければ（更新日時が同じなら）前回数えたものを使う
+     * （フォルダを開くたびに、全部のサブフォルダの中身を調べ直さないように）
+     */
+    private fun folderInfo(d: File): Folder {
+        val modified = d.lastModified()
+        synchronized(folderCache) {
+            folderCache[d.path]?.let { (m, f) -> if (m == modified) return f }
+        }
+        val sub = visibleChildren(d)
+        val f = Folder(d, sub.count { it.isDirectory }, sub.count { isVideo(it) }, sub.count { isAudio(it) })
+        synchronized(folderCache) { folderCache[d.path] = modified to f }
+        return f
+    }
+
+    /** 最近数えたフォルダ（古いものから捨てる） */
+    private val folderCache = object : LinkedHashMap<String, Pair<Long, Folder>>(256, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<Long, Folder>>?) = size > 2000
     }
 
     /** フォルダ直下の動画・音楽（名前順） */

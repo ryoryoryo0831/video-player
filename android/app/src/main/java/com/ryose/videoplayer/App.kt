@@ -67,6 +67,9 @@ object ThumbCache {
     fun fileFor(context: Context, key: String, modified: Long): File =
         File(dir(context), "${key.hashCode().toUInt().toString(16)}_${modified.toString(16)}.jpg")
 
+    /** 作れなかったもの（アプリを閉じるまで覚えておき、表示のたびに作り直そうとしない） */
+    private val failed = java.util.Collections.synchronizedSet(HashSet<String>())
+
     /** キャッシュにあればそれを返し、無ければ make で作って保存する */
     fun getOrCreate(context: Context, key: String, modified: Long, make: () -> Bitmap?): File? {
         val file = fileFor(context, key, modified)
@@ -74,7 +77,11 @@ object ThumbCache {
             file.setLastModified(System.currentTimeMillis())
             return file
         }
-        val bitmap = make() ?: return null
+        if (file.name in failed) return null
+        val bitmap = make() ?: run {
+            failed += file.name
+            return null
+        }
         val scaled = scaleDown(bitmap)
         val tmp = File(file.path + ".tmp")
         tmp.outputStream().use { scaled.compress(Bitmap.CompressFormat.JPEG, 85, it) }
