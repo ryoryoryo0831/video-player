@@ -314,6 +314,8 @@ class PlayerActivity : AppCompatActivity() {
         if (pendingLoad != null) s.ensureEngineUpToDate()
         s.player.attachViews(videoLayout, null, true, false)
         s.videoUiAttached = true
+        // 裏に回っている間に再生サービスが OS に止められていたら、前回の動画を一時停止のまま用意し直す
+        if (pendingLoad == null && s.currentItem == null) s.restoreLastSession(play = false, videoOnly = true)
         when {
             pendingLoad != null -> startPendingLoad(s)
             s.currentItem == null || s.currentItem?.isAudio == true -> {

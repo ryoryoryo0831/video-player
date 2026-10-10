@@ -282,17 +282,18 @@ class PopupPlayer(private val service: PlaybackService) : PlaybackService.Listen
         })
 
         touch.setOnTouchListener { _, e ->
+            // 指を置いたところで前の操作の状態を消す（先に消さないと、ピンチ直後の 1 回目のタップが効かない）
+            if (e.actionMasked == MotionEvent.ACTION_DOWN) {
+                downX = e.rawX
+                downY = e.rawY
+                startX = params.x
+                startY = params.y
+                dragging = false
+                scaling = false
+            }
             scaleDetector.onTouchEvent(e)
             if (!scaling) tapDetector.onTouchEvent(e)
             when (e.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    downX = e.rawX
-                    downY = e.rawY
-                    startX = params.x
-                    startY = params.y
-                    dragging = false
-                    scaling = false
-                }
                 MotionEvent.ACTION_MOVE -> if (!scaling && e.pointerCount == 1) {
                     val dx = e.rawX - downX
                     val dy = e.rawY - downY

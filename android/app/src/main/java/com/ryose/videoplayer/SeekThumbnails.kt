@@ -25,6 +25,9 @@ class SeekThumbnails(private val context: Context) {
     private var sourceKey: String? = null
     /** 今のファイルは画像を作れなかった（端末が対応していない形式など） */
     private var failedKey: String? = null
+    /** 今のファイルで画像を作れたことがあるか・続けて作れなかった回数 */
+    private var anyFrame = false
+    private var misses = 0
 
     /** 画像を作れそうな動画か */
     fun supports(item: PlaylistItem?): Boolean =
@@ -36,6 +39,8 @@ class SeekThumbnails(private val context: Context) {
         if (item.key != sourceKey) {
             releaseNow()
             sourceKey = item.key
+            anyFrame = false
+            misses = 0
         }
         val r = retriever ?: open(item)?.also { retriever = it }
         if (r == null) {
@@ -43,13 +48,21 @@ class SeekThumbnails(private val context: Context) {
             return@withContext null
         }
         val us = ms * 1000
-        runCatching {
+        val frame = runCatching {
             if (Build.VERSION.SDK_INT >= 27) {
                 r.getScaledFrameAtTime(us, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, maxW, maxH)
             } else {
                 r.getFrameAtTime(us, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)?.let { scaleDown(it, maxW, maxH) }
             }
         }.getOrNull()
+        if (frame != null) {
+            anyFrame = true
+            misses = 0
+        } else if (!anyFrame && ++misses >= 2) {
+            // ファイルは開けても画像を取り出せない形式（端末のデコーダが対応していないなど）
+            failedKey = item.key
+        }
+        frame
     }
 
     /** 画面を閉じるときに後片付けする */

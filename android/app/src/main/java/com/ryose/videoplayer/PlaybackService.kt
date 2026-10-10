@@ -189,6 +189,14 @@ class PlaybackService : Service() {
                 override fun onSeekTo(pos: Long) = seekTo(pos)
                 override fun onStop() = stopPlayback()
             })
+            // アプリが止まったあとでも、イヤホンや Bluetooth の再生ボタンで前回の続きを再生できるように
+            setMediaButtonReceiver(
+                PendingIntent.getBroadcast(
+                    this@PlaybackService, 0,
+                    Intent(Intent.ACTION_MEDIA_BUTTON).setClass(this@PlaybackService, MediaButtonReceiver::class.java),
+                    PendingIntent.FLAG_IMMUTABLE,
+                )
+            )
         }
 
         ContextCompat.registerReceiver(
@@ -200,13 +208,27 @@ class PlaybackService : Service() {
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_PLAY_PAUSE -> togglePlay()
+        val action = intent?.action
+        // 再生サービスが一度止められていたら（通知・イヤホンのボタンから起こされた）、前回の続きを用意する
+        val resumes = action == ACTION_PLAY_PAUSE || action == ACTION_PLAY
+        val restored = currentItem == null && action in RESUMING_ACTIONS && restoreLastSession(play = resumes)
+        when (action) {
+            // 前回の続きを読み込み直したときは、もう再生が始まっている
+            ACTION_PLAY_PAUSE -> if (!restored) togglePlay()
+            ACTION_PLAY -> if (!restored) play()
             ACTION_NEXT -> next()
             ACTION_PREVIOUS -> previous()
             ACTION_STOP -> stopPlayback()
             // 一時停止中の通知をスワイプで消した：画面で見ていなければ終了する
             ACTION_DISMISS -> if (!videoUiAttached && !player.isPlaying) stopPlayback()
+        }
+        if (intent?.getBooleanExtra(EXTRA_FOREGROUND, false) == true) {
+            // startForegroundService で起こされたときは、必ず常駐を始める（始めないとアプリが落ちる）
+            startForegroundIfNeeded()
+            if (currentItem == null) stopPlayback()
+        } else if (currentItem == null && listeners.isEmpty()) {
+            // 何も再生するものが無い：起こされただけなので終わる
+            stopSelf()
         }
         return START_NOT_STICKY
     }
@@ -220,6 +242,8 @@ class PlaybackService : Service() {
     override fun onDestroy() {
         popup?.dismiss()
         savePosition()
+        // OS に止められた場合も、押しても何も起きない通知を残さない
+        NotificationManagerCompat.from(this).cancel(NOTIFICATION_ID)
         stopRendererDiscovery()
         renderer?.release()
         renderer = null
@@ -296,8 +320,8 @@ class PlaybackService : Service() {
 
     // ---------- 読み込みと再生 ----------
 
-    /** 新しいプレイリストで再生を始める */
-    fun load(newItems: List<PlaylistItem>, startIndex: Int, shuffled: Boolean) {
+    /** 新しいプレイリストで再生を始める（[paused] なら一時停止した状態で用意だけする） */
+    fun load(newItems: List<PlaylistItem>, startIndex: Int, shuffled: Boolean, paused: Boolean = false) {
         if (startIndex !in newItems.indices) return
         savePosition()
         sleepAtEnd = false
@@ -309,10 +333,25 @@ class PlaybackService : Service() {
         ensureEngineUpToDate()
         // 画面から切り離されても動き続けるように「開始済み」のサービスにしておく
         startService(Intent(this, PlaybackService::class.java))
-        playCurrent(startPositionOf(newItems[startIndex]), false)
+        playCurrent(startPositionOf(newItems[startIndex]), paused)
         // 画面が表示されている今のうちに常駐を始める（再生開始を待つと、その前に画面を離れた場合に始められない）
         startForegroundIfNeeded()
+        if (paused) scheduleIdleStop()
         dispatch { it.onModesChanged() }
+    }
+
+    /**
+     * 前回の再生キューを読み込み直す（再生サービスが OS に止められたあとなど）。
+     * [videoOnly]・[audioOnly] で、前回が動画（音楽）だったときだけに限る。読み込めたら true
+     */
+    fun restoreLastSession(play: Boolean, videoOnly: Boolean = false, audioOnly: Boolean = false): Boolean {
+        if (currentItem != null) return true
+        val saved = LastSession.load(this) ?: return false
+        val cur = saved.current ?: return false
+        if (videoOnly && cur.isAudio) return false
+        if (audioOnly && !cur.isAudio) return false
+        load(saved.items, saved.index, saved.shuffle, paused = !play)
+        return currentItem != null
     }
 
     private fun playCurrent(startMs: Long, paused: Boolean) {
@@ -358,6 +397,7 @@ class PlaybackService : Service() {
         player.play()
 
         scope.launch(Dispatchers.IO) { history.add(item) }
+        LastSession.save(this, items, index, shuffle)
         loadSubtitles(item)
         loadMeta(item)
         updateSession()
@@ -442,6 +482,7 @@ class PlaybackService : Service() {
         abandonFocus()
         releaseWifiLock()
         handler.removeCallbacks(saveTask)
+        handler.removeCallbacks(idleStopTask)
         session.isActive = false
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         NotificationManagerCompat.from(this).cancel(NOTIFICATION_ID)
@@ -760,6 +801,7 @@ class PlaybackService : Service() {
                 handler.removeCallbacks(saveTask)
                 handler.post(saveTask)
                 if (currentItem?.isNetwork == true) acquireWifiLock()
+                handler.removeCallbacks(idleStopTask)
                 updateSession()
                 startForegroundIfNeeded()
             }
@@ -768,7 +810,8 @@ class PlaybackService : Service() {
                 savePosition()
                 releaseWifiLock()
                 updateSession()
-                stopForegroundKeepNotification()
+                // 一時停止してもしばらくは常駐を続ける（すぐやめると OS に止められて、通知や電話のあとの再開が効かなくなる）
+                scheduleIdleStop()
             }
             MediaPlayer.Event.Stopped -> {
                 handler.removeCallbacks(saveTask)
@@ -1020,12 +1063,25 @@ class PlaybackService : Service() {
         }
     }
 
-    /** 一時停止したら常駐をやめる。通知は残すが、スワイプで消せるようになる */
-    private fun stopForegroundKeepNotification() {
-        if (!foreground) return
-        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH)
-        foreground = false
-        notifyNotification()
+    /**
+     * 一時停止のまま長い間たったら終わる（前回の続きはファイルに覚えてあるので、
+     * 通知・イヤホンのボタンや画面からまた再生できる）。画面で見ている間は待ち続ける
+     */
+    private val idleStopTask = object : Runnable {
+        override fun run() {
+            if (player.isPlaying) return
+            // 画面で見ている間や、電話で一時停止している間は待ち続ける
+            if (videoUiAttached || listeners.isNotEmpty() || pausedByFocus) {
+                handler.postDelayed(this, IDLE_STOP_MS)
+                return
+            }
+            stopPlayback()
+        }
+    }
+
+    private fun scheduleIdleStop() {
+        handler.removeCallbacks(idleStopTask)
+        handler.postDelayed(idleStopTask, IDLE_STOP_MS)
     }
 
     private fun notifyNotification() {
@@ -1092,12 +1148,18 @@ class PlaybackService : Service() {
 
     companion object {
         const val EXTRA_FROM_SESSION = "from_session"
+        /** startForegroundService で起こしたことを表す（すぐに常駐を始める必要がある） */
+        const val EXTRA_FOREGROUND = "foreground"
+        /** 一時停止のまま、この時間がたったら終わる */
+        private const val IDLE_STOP_MS = 30 * 60_000L
         private const val CHANNEL_ID = "playback"
         private const val NOTIFICATION_ID = 1
-        private const val ACTION_PLAY_PAUSE = "com.ryose.videoplayer.PLAY_PAUSE"
-        private const val ACTION_NEXT = "com.ryose.videoplayer.NEXT"
-        private const val ACTION_PREVIOUS = "com.ryose.videoplayer.PREVIOUS"
+        const val ACTION_PLAY_PAUSE = "com.ryose.videoplayer.PLAY_PAUSE"
+        const val ACTION_PLAY = "com.ryose.videoplayer.PLAY"
+        const val ACTION_NEXT = "com.ryose.videoplayer.NEXT"
+        const val ACTION_PREVIOUS = "com.ryose.videoplayer.PREVIOUS"
         private const val ACTION_STOP = "com.ryose.videoplayer.STOP"
         private const val ACTION_DISMISS = "com.ryose.videoplayer.DISMISS"
+        private val RESUMING_ACTIONS = setOf(ACTION_PLAY_PAUSE, ACTION_PLAY, ACTION_NEXT, ACTION_PREVIOUS)
     }
 }

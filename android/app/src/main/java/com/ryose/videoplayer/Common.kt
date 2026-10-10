@@ -80,20 +80,9 @@ object Playlist {
     fun set(context: Context, list: List<PlaylistItem>, shuffled: Boolean) {
         items = list
         shuffle = shuffled
-        val app = context.applicationContext
-        Thread {
-            runCatching {
-                val arr = org.json.JSONArray()
-                list.forEach { arr.put(it.toJson()) }
-                val text = JSONObject().put("shuffle", shuffled).put("items", arr).toString()
-                val tmp = File(file(app).path + ".tmp")
-                tmp.writeText(text)
-                if (!tmp.renameTo(file(app))) {
-                    file(app).delete()
-                    tmp.renameTo(file(app))
-                }
-            }
-        }.start()
+        val arr = org.json.JSONArray()
+        list.forEach { arr.put(it.toJson()) }
+        FileSaver.save(file(context), JSONObject().put("shuffle", shuffled).put("items", arr).toString())
     }
 
     /** メモリから消えていたら（アプリが一度終了していたら）ファイルから読み直す */
