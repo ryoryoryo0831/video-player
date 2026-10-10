@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 幅の広い画面では、シークバーやボタンが横に伸びすぎないように余白を広くする -->
+    <dimen name="audio_side">80dp</dimen>
+    <dimen name="audio_side_controls">72dp</dimen>
+</resources>

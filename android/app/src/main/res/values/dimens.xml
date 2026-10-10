@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 音楽の画面の左右の余白 -->
+    <dimen name="audio_side">24dp</dimen>
+    <dimen name="audio_side_controls">16dp</dimen>
+</resources>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- さらに広い画面（タブレットの横向きなど） -->
+    <dimen name="audio_side">200dp</dimen>
+    <dimen name="audio_side_controls">192dp</dimen>
+</resources>

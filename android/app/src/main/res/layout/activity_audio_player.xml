@@ -72,7 +72,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:paddingHorizontal="24dp">
+        android:paddingHorizontal="@dimen/audio_side">
 
         <TextView
             android:id="@+id/title"
@@ -134,7 +134,7 @@
         android:layout_marginTop="8dp"
         android:gravity="center"
         android:orientation="horizontal"
-        android:paddingHorizontal="16dp">
+        android:paddingHorizontal="@dimen/audio_side_controls">
 
         <ImageButton
             android:id="@+id/shuffleButton"
@@ -203,7 +203,7 @@
         android:layout_marginTop="8dp"
         android:gravity="center"
         android:orientation="horizontal"
-        android:paddingHorizontal="24dp"
+        android:paddingHorizontal="@dimen/audio_side"
         android:paddingBottom="16dp">
 
         <TextView
