@@ -17,7 +17,6 @@ import androidx.core.view.MenuProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
-import androidx.recyclerview.widget.LinearLayoutManager
 import android.provider.MediaStore
 import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
@@ -146,8 +145,10 @@ class VideosFragment : BaseListFragment() {
         val grid = AppSettings.videosGrid(requireContext())
         adapter.grid = grid
         if (grid) {
-            val widthDp = resources.displayMetrics.widthPixels / resources.displayMetrics.density
-            val span = (widthDp / 180).toInt().coerceAtLeast(2)
+            // 幅の広い画面ではタブが左にあるので、その分を引いて考える
+            val w = resources.configuration.screenWidthDp
+            val widthDp = if (w >= 600) w - 80 else w
+            val span = (widthDp / 180).coerceAtLeast(2)
             if ((list.layoutManager as? GridLayoutManager)?.spanCount != span) {
                 list.layoutManager = GridLayoutManager(requireContext(), span).apply {
                     spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
@@ -156,8 +157,9 @@ class VideosFragment : BaseListFragment() {
                     }
                 }
             }
-        } else if (list.layoutManager !is LinearLayoutManager || list.layoutManager is GridLayoutManager) {
-            list.layoutManager = LinearLayoutManager(requireContext())
+        } else {
+            // リスト表示：タブレットなど幅の広い画面では 2〜3 列に並べる
+            setColumns(listColumns())
         }
     }
 
@@ -255,6 +257,9 @@ class VideosFragment : BaseListFragment() {
             else -> {}
         }
     }
+
+    // フォルダの行には必ず動画がある（毎回すべての動画から探すと重いので、ここでは調べない）
+    override fun hasExtraActions(row: Row) = (row as? Row.Folder)?.id?.startsWith("vfolder:") == true
 
     override fun extraActions(row: Row): List<SheetItem> {
         val dir = (row as? Row.Folder)?.id?.removePrefix("vfolder:") ?: return emptyList()

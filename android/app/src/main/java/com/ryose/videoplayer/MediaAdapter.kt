@@ -42,6 +42,8 @@ class MediaAdapter(
     private val resume: ResumeStore,
     private val onClick: (position: Int) -> Unit,
     private val onLongClick: (position: Int) -> Unit = {},
+    /** 行に︙ボタン（長押しと同じメニュー）を出すか */
+    private val hasMenu: (Row) -> Boolean = { it is Row.Media },
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
     private var data = mutableListOf<Row>()
@@ -139,6 +141,7 @@ class MediaAdapter(
         val name: TextView = view.findViewById(R.id.name)
         val info: TextView = view.findViewById(R.id.info)
         val busy: View = view.findViewById(R.id.busy)
+        val more: View = view.findViewById(R.id.moreButton)
     }
 
     class MediaHolder(view: View) : RecyclerView.ViewHolder(view) {
@@ -148,6 +151,7 @@ class MediaAdapter(
         val title: TextView = view.findViewById(R.id.title)
         val meta: TextView = view.findViewById(R.id.meta)
         val dragHandle: ImageView = view.findViewById(R.id.dragHandle)
+        val more: View = view.findViewById(R.id.moreButton)
     }
 
     class HeaderHolder(view: View) : RecyclerView.ViewHolder(view) {
@@ -206,7 +210,24 @@ class MediaAdapter(
             onLongClick(holder.bindingAdapterPosition)
             true
         }
-        when (val row = data[position]) {
+        val row0 = data[position]
+        val more = when (holder) {
+            is FolderHolder -> holder.more
+            is MediaHolder -> holder.more
+            else -> null
+        }
+        more?.let { b ->
+            val show = !(row0 is Row.Folder && row0.busy) && hasMenu(row0)
+            b.visibility = if (show) View.VISIBLE else View.GONE
+            b.setOnClickListener { onLongClick(holder.bindingAdapterPosition) }
+            // 読み上げで、どの行のメニューか分かるように
+            b.contentDescription = when (row0) {
+                is Row.Media -> "${row0.item.title}のメニュー"
+                is Row.Folder -> "${row0.name}のメニュー"
+                else -> null
+            }
+        }
+        when (val row = row0) {
             is Row.Header -> {
                 (holder as HeaderHolder).title.text = row.title
                 holder.itemView.setOnClickListener(null)

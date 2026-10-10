@@ -50,8 +50,8 @@ abstract class BaseListFragment : Fragment(R.layout.fragment_list) {
         loading = view.findViewById(R.id.loading)
         fab = view.findViewById(R.id.fab)
         resume = ResumeStore(requireContext())
-        adapter = MediaAdapter(resume, ::onRowClick, ::onRowLongClick)
-        list.layoutManager = LinearLayoutManager(requireContext())
+        adapter = MediaAdapter(resume, ::onRowClick, ::onRowLongClick) { row -> row is Row.Media || hasExtraActions(row) }
+        setColumns(listColumns())
         list.adapter = adapter
         grantButton.setOnClickListener {
             // 「再試行」などに使っているときはその処理、そうでなければ「アクセスを許可」
@@ -128,6 +128,34 @@ abstract class BaseListFragment : Fragment(R.layout.fragment_list) {
         updateSubtitle()
     }
 
+    /**
+     * 一覧の列の数。タブレットなど幅の広い画面では、行を 2〜3 列に並べる
+     * （幅の広い画面ではタブが左にあるので、その分を引いて考える）
+     */
+    protected fun listColumns(): Int {
+        val w = resources.configuration.screenWidthDp
+        val usable = if (w >= 600) w - 80 else w
+        return (usable / 440).coerceIn(1, 3)
+    }
+
+    /** 列の数を変える（見出しの行はいつも横いっぱい） */
+    protected fun setColumns(span: Int) {
+        if (span <= 1) {
+            val lm = list.layoutManager
+            if (lm !is LinearLayoutManager || lm is androidx.recyclerview.widget.GridLayoutManager) {
+                list.layoutManager = LinearLayoutManager(requireContext())
+            }
+            return
+        }
+        val lm = list.layoutManager as? androidx.recyclerview.widget.GridLayoutManager
+        if (lm?.spanCount == span) return
+        list.layoutManager = androidx.recyclerview.widget.GridLayoutManager(requireContext(), span).apply {
+            spanSizeLookup = object : androidx.recyclerview.widget.GridLayoutManager.SpanSizeLookup() {
+                override fun getSpanSize(position: Int) = if (adapter.rows.getOrNull(position) is Row.Header) span else 1
+            }
+        }
+    }
+
     protected open fun onRowClick(position: Int) {}
 
     /** 一覧に並んでいる動画をまとめてプレイリストにして、指定の行から再生する */
@@ -155,6 +183,9 @@ abstract class BaseListFragment : Fragment(R.layout.fragment_list) {
 
     /** 長押しメニューに追加する項目（画面ごとに上書き） */
     protected open fun extraActions(row: Row): List<SheetItem> = emptyList()
+
+    /** 行に︙ボタンを出すか（メニューを作るのが重い画面は、軽い判定に上書きする） */
+    protected open fun hasExtraActions(row: Row): Boolean = extraActions(row).isNotEmpty()
 
     private fun onRowLongClick(position: Int) {
         val row = adapter.rows.getOrNull(position) ?: return

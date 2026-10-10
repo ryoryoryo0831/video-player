@@ -219,6 +219,9 @@ class MusicFragment : BaseListFragment() {
         }
     }
 
+    // アルバム・アーティストの行には必ず曲がある（毎回すべての曲から探すと重いので、ここでは調べない）
+    override fun hasExtraActions(row: Row) = row is Row.Folder
+
     override fun extraActions(row: Row): List<SheetItem> {
         if (row !is Row.Folder) return emptyList()
         val items = songsOf(row).map { it.item }

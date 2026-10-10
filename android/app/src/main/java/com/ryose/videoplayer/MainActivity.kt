@@ -27,7 +27,7 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.appbar.MaterialToolbar
-import com.google.android.material.bottomnavigation.BottomNavigationView
+import com.google.android.material.navigation.NavigationBarView
 import coil.load
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -36,7 +36,8 @@ import org.videolan.libvlc.MediaPlayer
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var bottomNav: BottomNavigationView
+    /** タブ（縦長の画面では下に並ぶ BottomNavigationView、幅の広い画面では左に並ぶ NavigationRailView） */
+    private lateinit var bottomNav: NavigationBarView
     private var currentTab = R.id.tab_videos
 
     // ミニプレイヤー
@@ -130,6 +131,13 @@ class MainActivity : AppCompatActivity() {
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
             v.updatePadding(left = bars.left, top = bars.top, right = bars.right)
             insets
+        }
+        // 幅の広い画面（タブが左）では、一覧とミニプレイヤーの下にナビゲーションバーの分の余白をとる
+        findViewById<View?>(R.id.contentColumn)?.let { column ->
+            ViewCompat.setOnApplyWindowInsetsListener(column) { v, insets ->
+                v.updatePadding(bottom = insets.getInsets(WindowInsetsCompat.Type.systemBars()).bottom)
+                insets
+            }
         }
 
         bottomNav = findViewById(R.id.bottomNav)

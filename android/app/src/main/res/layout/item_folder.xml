@@ -58,4 +58,17 @@
         android:visibility="gone"
         app:indicatorSize="20dp"
         app:trackThickness="2dp" />
+
+    <!-- ︙：長押しと同じメニュー（長押しに気づかなくても使えるように） -->
+    <ImageButton
+        android:id="@+id/moreButton"
+        android:layout_width="40dp"
+        android:layout_height="48dp"
+        android:layout_marginEnd="-8dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="@string/more"
+        android:scaleType="center"
+        android:src="@drawable/ic_more"
+        android:visibility="gone"
+        app:tint="@color/text_muted" />
 </LinearLayout>

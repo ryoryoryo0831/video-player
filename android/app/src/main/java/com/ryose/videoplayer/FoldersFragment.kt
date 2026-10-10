@@ -550,6 +550,13 @@ class FoldersFragment : BaseListFragment() {
         }
     }
 
+    // メニューがある行（フォルダ・お気に入り・サーバー・ネットワークの場所）に︙ボタンを出す
+    override fun hasExtraActions(row: Row): Boolean {
+        if (row !is Row.Folder) return false
+        val id = row.id
+        return row.dir != null || (id != null && (id.startsWith("fav:") || id.startsWith("server:") || id.startsWith("net:")))
+    }
+
     override fun extraActions(row: Row): List<SheetItem> {
         if (row !is Row.Folder) return emptyList()
         val id = row.id
