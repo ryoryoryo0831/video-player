@@ -115,6 +115,8 @@ class PlayerActivity : AppCompatActivity() {
     private var readyGeneration = 0
     /** この画面が映像の表示先になっているか */
     private var viewsAttached = false
+    /** 一覧などで選ばれた動画のリストを、裏で用意している途中か */
+    private var loadPending = false
     /** 今の曲が音楽・再生するものが無かったので、映像の表示先にならずに閉じた（音楽は止めない） */
     private var closedWithoutVideo = false
 
@@ -180,9 +182,10 @@ class PlayerActivity : AppCompatActivity() {
 
     private val listener = object : PlaybackService.Listener {
         override fun onPlayerEvent(e: MediaPlayer.Event) = handleEvent(e)
-        override fun onItemChanged() = updateItem()
+        // 選ばれた動画を読み込んでいる間は、前に再生していたもの（音楽など）の切り替わり・終了で閉じない
+        override fun onItemChanged() { if (!loadPending) updateItem() }
         override fun onModesChanged() = updateModes()
-        override fun onPlaybackStopped() = finish()
+        override fun onPlaybackStopped() { if (!loadPending) finish() }
         override fun onRenderersChanged() = updateModes()
         override fun onPlaybackError(error: PlaybackService.PlaybackError): Boolean {
             // 小窓（PiP）では操作できないので、いままでどおり終了してもらう
@@ -349,6 +352,7 @@ class PlayerActivity : AppCompatActivity() {
         }
         val li = loadIntent
         val gen = ++readyGeneration
+        loadPending = li != null
         if (li == null && s.currentItem != null) {
             setUpPlayer(s, null, null)
             return
@@ -363,6 +367,7 @@ class PlayerActivity : AppCompatActivity() {
             // 待っている間に画面を離れた・別の動画が選ばれた
             if (gen != readyGeneration || svc !== s) return@launch
             if (loadIntent === li) loadIntent = null
+            loadPending = false
             setUpPlayer(s, load, saved)
         }
     }
@@ -1048,6 +1053,8 @@ class PlayerActivity : AppCompatActivity() {
      */
     override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
         val s0 = svc
+        // エラーの表示中は、十字キーで「再試行」「閉じる」を選べるようにする（シークや操作パネルに取られない）
+        if (errorPanel.visibility == View.VISIBLE && keyCode in DPAD_KEYS) return super.onKeyDown(keyCode, event)
         if (s0 != null && !locked) {
             when (keyCode) {
                 android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, android.view.KeyEvent.KEYCODE_SPACE -> {
@@ -1699,6 +1706,12 @@ class PlayerActivity : AppCompatActivity() {
         const val LOADING_DELAY_MS = 400L
         /** 操作パネルを自動で隠すまでの時間 */
         const val CONTROLS_HIDE_MS = 4000
+        /** 十字キー（と決定キー） */
+        val DPAD_KEYS = setOf(
+            android.view.KeyEvent.KEYCODE_DPAD_LEFT, android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+            android.view.KeyEvent.KEYCODE_DPAD_UP, android.view.KeyEvent.KEYCODE_DPAD_DOWN,
+            android.view.KeyEvent.KEYCODE_DPAD_CENTER, android.view.KeyEvent.KEYCODE_ENTER,
+        )
         const val ACTION_PIP = "com.ryose.videoplayer.PIP_CONTROL"
         const val EXTRA_PIP = "control"
         const val PIP_REWIND = 1

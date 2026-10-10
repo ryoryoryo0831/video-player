@@ -1324,7 +1324,8 @@ class PlaybackService : Service() {
 
     private fun updateSession() {
         val item = currentItem ?: return
-        val playing = player.isPlaying
+        // 準備中は、準備が終わったあとの状態（再生か一時停止か）を出す（通知のボタンが逆にならないように）
+        val playing = isPlaying
         val state = PlaybackStateCompat.Builder()
             .setActions(
                 PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_PAUSE or
@@ -1340,7 +1341,7 @@ class PlaybackService : Service() {
                     else -> PlaybackStateCompat.STATE_PAUSED
                 },
                 reloadPosition(),
-                if (playing) rate else 0f,
+                if (playing && !preparing) rate else 0f,
             )
             .build()
         session.setPlaybackState(state)
@@ -1380,7 +1381,7 @@ class PlaybackService : Service() {
             )
             foreground = true
             notificationShown = true
-            lastNotifiedPlaying = player.isPlaying
+            lastNotifiedPlaying = isPlaying
             true
         } catch (_: Exception) {
             // バックグラウンドからの開始が制限された場合など。通知だけ更新して再生は続ける
@@ -1415,7 +1416,7 @@ class PlaybackService : Service() {
         try {
             NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, buildNotification())
             notificationShown = true
-            lastNotifiedPlaying = player.isPlaying
+            lastNotifiedPlaying = isPlaying
         } catch (_: SecurityException) {
         }
     }
@@ -1441,7 +1442,7 @@ class PlaybackService : Service() {
                 }
             )
         }
-        val playing = player.isPlaying
+        val playing = isPlaying
         val open = PendingIntent.getActivity(
             this, 0, screenIntent().addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,

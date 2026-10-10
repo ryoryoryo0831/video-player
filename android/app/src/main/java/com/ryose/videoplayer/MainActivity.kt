@@ -80,9 +80,12 @@ class MainActivity : AppCompatActivity() {
      */
     private val mediaPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-            if (result.isNotEmpty() && result.values.none { it } &&
-                result.keys.none { shouldShowRequestPermissionRationale(it) }
-            ) {
+            if (result.isEmpty() || result.values.any { it }) return@registerForActivityResult
+            // 初めてのお願いを閉じただけでも「もう聞かない」と同じ結果になるので、2回目に断られてから設定へ案内する
+            val prefs = getSharedPreferences(PERMISSION_PREFS, MODE_PRIVATE)
+            val denials = prefs.getInt(KEY_MEDIA_DENIALS, 0) + 1
+            prefs.edit().putInt(KEY_MEDIA_DENIALS, denials).apply()
+            if (denials >= 2 && result.keys.none { shouldShowRequestPermissionRationale(it) }) {
                 showAccessChoices()
             }
         }
@@ -314,5 +317,8 @@ class MainActivity : AppCompatActivity() {
 
     private companion object {
         const val KEY_TAB = "tab"
+        const val PERMISSION_PREFS = "permissions"
+        /** 動画・音楽へのアクセスを断られた回数 */
+        const val KEY_MEDIA_DENIALS = "media_denials"
     }
 }

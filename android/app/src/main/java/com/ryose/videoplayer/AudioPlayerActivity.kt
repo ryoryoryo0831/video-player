@@ -140,7 +140,13 @@ class AudioPlayerActivity : AppCompatActivity() {
             }
         })
 
-        if (savedInstanceState == null) takeLoadFrom(intent)
+        // 選んだ曲を読み込む前に画面が作り直された（回転など）ときも、その曲を再生する
+        if (savedInstanceState == null || savedInstanceState.getBoolean(STATE_PENDING_LOAD)) takeLoadFrom(intent)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(STATE_PENDING_LOAD, loadIntent != null)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -330,5 +336,10 @@ class AudioPlayerActivity : AppCompatActivity() {
             add(SheetItem(R.drawable.ic_close, "再生を終了") { s.stopPlayback() })
         }
         ActionSheet.show(this, s.displayTitle(), items, s.displaySubtitle().ifEmpty { null })
+    }
+
+    private companion object {
+        /** 選んだ曲をまだ読み込んでいない（画面の作り直しをまたいで覚えておく） */
+        const val STATE_PENDING_LOAD = "pending_load"
     }
 }
