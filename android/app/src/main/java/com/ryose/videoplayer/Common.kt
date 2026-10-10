@@ -83,12 +83,11 @@ object Playlist {
         items = list
         shuffle = shuffled
         autoAdvance = advance
-        val arr = org.json.JSONArray()
-        list.forEach { arr.put(it.toJson()) }
-        FileSaver.save(
-            file(context),
-            JSONObject().put("shuffle", shuffled).put("advance", advance).put("items", arr).toString(),
-        )
+        FileSaver.save(file(context)) {
+            val arr = org.json.JSONArray()
+            list.forEach { arr.put(it.toJson()) }
+            JSONObject().put("shuffle", shuffled).put("advance", advance).put("items", arr).toString()
+        }
     }
 
     /** メモリから消えていたら（アプリが一度終了していたら）ファイルから読み直す */

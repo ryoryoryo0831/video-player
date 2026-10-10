@@ -170,7 +170,7 @@ object PlayerDialogs {
     }
 
     /** 再生キュー：これから再生する順番の一覧。タップでその曲へ、長押しで並べ替え・削除など */
-    fun showQueue(context: Context, svc: PlaybackService, scrollTo: Int = svc.orderPos) {
+    fun showQueue(context: Context, svc: PlaybackService, scrollTo: Int = svc.orderPos, showHint: Boolean = true) {
         val order = svc.order
         if (order.isEmpty()) return
         val labels = order.mapIndexed { pos, i ->
@@ -186,31 +186,36 @@ object PlayerDialogs {
             // 今の曲（並べ替えたあとはその曲）が見える位置までスクロール
             setSelection((scrollTo - 2).coerceAtLeast(0))
             setOnItemLongClickListener { _, _, pos, _ ->
-                showQueueItemMenu(context, svc, pos) { newPos ->
+                showQueueItemMenu(context, svc, pos, onPlay = { dialog.dismiss() }) { newPos ->
                     dialog.dismiss()
-                    showQueue(context, svc, newPos)
+                    showQueue(context, svc, newPos, showHint = false)
                 }
                 true
             }
         }
-        if (order.size > 1) {
+        if (showHint && order.size > 1) {
             android.widget.Toast.makeText(context, "長押しで、順番の入れ替え・キューから外すなど", android.widget.Toast.LENGTH_SHORT).show()
         }
     }
 
     /** 再生キューの 1 曲を長押ししたときのメニュー。変えたら新しい位置を onChanged に渡す */
-    private fun showQueueItemMenu(context: Context, svc: PlaybackService, pos: Int, onChanged: (Int) -> Unit) {
+    private fun showQueueItemMenu(
+        context: Context, svc: PlaybackService, pos: Int, onPlay: () -> Unit, onChanged: (Int) -> Unit,
+    ) {
         val item = svc.order.getOrNull(pos)?.let { svc.items.getOrNull(it) } ?: return
         val isCurrent = pos == svc.orderPos
         val last = svc.order.lastIndex
         val actions = buildList {
-            if (!isCurrent) add(SheetItem(R.drawable.ic_play, "今すぐ再生") { svc.playAt(pos) })
+            if (!isCurrent) add(SheetItem(R.drawable.ic_play, "今すぐ再生") {
+                svc.playAt(pos)
+                onPlay()
+            })
             if (!isCurrent && pos != svc.orderPos + 1) add(SheetItem(R.drawable.ic_skip_next, "次に再生") {
                 val to = if (pos < svc.orderPos) svc.orderPos else svc.orderPos + 1
                 svc.moveInQueue(pos, to)
                 onChanged(to)
             })
-            if (pos > 0) add(SheetItem(R.drawable.ic_expand_more, "1 つ上へ") {
+            if (pos > 0) add(SheetItem(R.drawable.ic_expand_less, "1 つ上へ") {
                 svc.moveInQueue(pos, pos - 1)
                 onChanged(pos - 1)
             })

@@ -214,7 +214,7 @@ class PlaybackService : Service() {
         val action = intent?.action
         // 再生サービスが一度止められていたら（通知・イヤホンのボタンから起こされた）、前回の続きを用意する
         val resumes = action == ACTION_PLAY_PAUSE || action == ACTION_PLAY
-        val restored = currentItem == null && action in RESUMING_ACTIONS && restoreLastSession(play = resumes)
+        val restored = currentItem == null && action in RESUMING_ACTIONS && restoreLastSession(play = resumes, evenIfStopped = true)
         when (action) {
             // 前回の続きを読み込み直したときは、もう再生が始まっている
             ACTION_PLAY_PAUSE -> if (!restored) togglePlay()
@@ -332,7 +332,8 @@ class PlaybackService : Service() {
      * 動画の画面につなぐ前に呼び、つないだあとで [replayAfterEngineChange] を呼ぶ。作り直したら true
      */
     fun recreateEngineKeepingItem(): Boolean {
-        if (currentItem == null || videoUiAttached || !engineOutdated()) return false
+        // キャスト中は作り直さない（キャストが切れてしまうので）
+        if (currentItem == null || videoUiAttached || renderer != null || !engineOutdated()) return false
         pendingReplay = player.time.coerceAtLeast(0) to player.isPlaying
         rebuildEngine()
         return true
@@ -367,7 +368,7 @@ class PlaybackService : Service() {
     /** 新しいプレイリストで再生を始める（[paused] なら一時停止した状態で用意だけする） */
     fun load(
         newItems: List<PlaylistItem>, startIndex: Int, shuffled: Boolean,
-        paused: Boolean = false, advance: Boolean = true,
+        paused: Boolean = false, advance: Boolean = true, presetOrder: List<Int>? = null,
     ) {
         if (startIndex !in newItems.indices) return
         savePosition()
@@ -379,6 +380,11 @@ class PlaybackService : Service() {
         shuffle = shuffled
         hasQueue = true
         buildOrder()
+        // 前回の続きを読み込み直すときは、並べ替えた順番もそのまま戻す
+        if (presetOrder != null && presetOrder.size == newItems.size) {
+            order = presetOrder
+            orderPos = order.indexOf(index).coerceAtLeast(0)
+        }
         ensureEngineUpToDate()
         // 画面から切り離されても動き続けるように「開始済み」のサービスにしておく
         startService(Intent(this, PlaybackService::class.java))
@@ -393,13 +399,17 @@ class PlaybackService : Service() {
      * 前回の再生キューを読み込み直す（再生サービスが OS に止められたあとなど）。
      * [videoOnly]・[audioOnly] で、前回が動画（音楽）だったときだけに限る。読み込めたら true
      */
-    fun restoreLastSession(play: Boolean, videoOnly: Boolean = false, audioOnly: Boolean = false): Boolean {
+    fun restoreLastSession(
+        play: Boolean, videoOnly: Boolean = false, audioOnly: Boolean = false, evenIfStopped: Boolean = false,
+    ): Boolean {
         if (currentItem != null) return true
         val saved = LastSession.load(this) ?: return false
         val cur = saved.current ?: return false
+        // わざと終わらせた再生は、画面に戻っただけでは元に戻さない（ボタンで再生を頼まれたときは戻す）
+        if (saved.stopped && !evenIfStopped) return false
         if (videoOnly && cur.isAudio) return false
         if (audioOnly && !cur.isAudio) return false
-        load(saved.items, saved.index, saved.shuffle, paused = !play)
+        load(saved.items, saved.index, saved.shuffle, paused = !play, advance = saved.advance, presetOrder = saved.order)
         return currentItem != null
     }
 
@@ -451,7 +461,7 @@ class PlaybackService : Service() {
 
         // 履歴は動画だけ（音楽を聴くと動画の履歴が押し出されてしまうので）
         if (!item.isAudio) scope.launch(Dispatchers.IO) { history.add(item) }
-        LastSession.save(this, items, index, shuffle)
+        LastSession.save(this, items, index, shuffle, order, autoAdvance)
         loadSubtitles(item)
         loadMeta(item)
         updateSession()
@@ -518,9 +528,10 @@ class PlaybackService : Service() {
         if (!player.isPlaying) player.setTime(player.time.coerceAtLeast(0))
     }
 
-    /** 再生を終了して通知も消す */
-    fun stopPlayback() {
+    /** 再生を終了して通知も消す（[byUser] は、わざと終わらせたか。しばらく放っておいて終わったときは false） */
+    fun stopPlayback(byUser: Boolean = true) {
         savePosition()
+        if (byUser && currentItem != null) LastSession.markStopped(this)
         player.stop()
         if (renderer != null) {
             player.setRenderer(null)
@@ -569,6 +580,8 @@ class PlaybackService : Service() {
     /** 再生キューに加える（[next] なら今の曲・動画の次に、そうでなければ最後に） */
     fun enqueue(added: List<PlaylistItem>, next: Boolean) {
         if (added.isEmpty() || currentItem == null) return
+        // わざわざ加えたのだから、終わったら次へ進む
+        autoAdvance = true
         val start = items.size
         items = items + added
         val newIdx = added.indices.map { start + it }
@@ -595,7 +608,7 @@ class PlaybackService : Service() {
 
     private fun queueChanged() {
         orderPos = order.indexOf(index).coerceAtLeast(0)
-        LastSession.save(this, items, index, shuffle)
+        LastSession.save(this, items, index, shuffle, order, autoAdvance)
         dispatch { it.onModesChanged() }
     }
 
@@ -940,8 +953,10 @@ class PlaybackService : Service() {
         errorHandled = true
         errorStreak++
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        val item = currentItem
         handler.post {
-            if (hasNext() && errorStreak < items.size) next() else stopPlayback()
+            // 終わったら止まる設定のときは、関係ない次の動画へ飛ばない
+            if (hasNext() && errorStreak < items.size && (autoAdvance || item?.isAudio == true)) next() else stopPlayback()
         }
     }
 
@@ -1194,7 +1209,7 @@ class PlaybackService : Service() {
                 handler.postDelayed(this, IDLE_STOP_MS)
                 return
             }
-            stopPlayback()
+            stopPlayback(byUser = false)
         }
     }
 

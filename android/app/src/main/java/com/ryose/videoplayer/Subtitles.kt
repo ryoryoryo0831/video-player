@@ -33,6 +33,11 @@ object Subtitles {
         "Windows-1252（英語・欧米の言語）" to "windows-1252",
     )
 
+    /** 端末に windows-31j が無い場合は Shift_JIS で読む */
+    private fun charsetOrFallback(name: String): Charset = runCatching { Charset.forName(name) }.getOrElse {
+        if (name.equals("windows-31j", true)) Charset.forName("Shift_JIS") else throw it
+    }
+
     fun isSubtitleName(name: String) = name.substringAfterLast('.', "").lowercase() in ALL_EXT
 
     /** 上限までしか読まない。上限を超えるファイルなら null */
@@ -85,7 +90,7 @@ object Subtitles {
         if (file.extension.lowercase() !in TEXT_EXT || file.length() > MAX_TEXT_SIZE) return file
         return try {
             val bytes = file.readBytes()
-            val converted = if (charset != null) String(bytes, Charset.forName(charset)).toByteArray(Charsets.UTF_8)
+            val converted = if (charset != null) String(bytes, charsetOrFallback(charset)).toByteArray(Charsets.UTF_8)
             else toUtf8IfNeeded(bytes) ?: return file
             writeCache(context, file.path, file.name, converted)
         } catch (_: Exception) {

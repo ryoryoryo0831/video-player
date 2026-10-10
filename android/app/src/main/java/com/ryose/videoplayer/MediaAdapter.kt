@@ -119,6 +119,9 @@ class MediaAdapter(
         fun showArt(path: String, fallbackRes: Int) {
             showIcon(fallbackRes)
             icon.load(AudioArt(path)) {
+                // 読み込み中も、いつものアイコンを出しておく
+                placeholder(fallbackRes)
+                error(fallbackRes)
                 listener(
                     onSuccess = { _, _ ->
                         icon.imageTintList = null
