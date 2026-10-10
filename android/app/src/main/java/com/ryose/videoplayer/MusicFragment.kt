@@ -165,13 +165,19 @@ class MusicFragment : BaseListFragment() {
                 .map { list ->
                     val artists = list.map { it.artist }.distinct()
                     val artist = if (artists.size == 1) artists[0] else "さまざまなアーティスト"
-                    Row.Folder(list.first().album, "$artist · ${list.size} 曲", R.drawable.ic_album, id = "album:${list.first().albumId}")
+                    Row.Folder(
+                        list.first().album, "$artist · ${list.size} 曲", R.drawable.ic_album,
+                        id = "album:${list.first().albumId}", art = list.firstNotNullOfOrNull { it.item.path },
+                    )
                 }
             else -> songs.groupBy { it.artist }.entries
                 .sortedWith(compareBy(NaturalOrder) { it.key })
                 .map { (artist, list) ->
                     val albums = list.map { it.albumId }.distinct().size
-                    Row.Folder(artist, "$albums 枚のアルバム · ${list.size} 曲", R.drawable.ic_person, id = "artist:$artist")
+                    Row.Folder(
+                        artist, "$albums 枚のアルバム · ${list.size} 曲", R.drawable.ic_person,
+                        id = "artist:$artist", art = list.firstNotNullOfOrNull { it.item.path },
+                    )
                 }
         }
     }

@@ -222,6 +222,20 @@ class PlaybackService : Service() {
             ACTION_NEXT -> next()
             ACTION_PREVIOUS -> previous()
             ACTION_STOP -> stopPlayback()
+            ACTION_ENQUEUE, ACTION_PLAY_NEXT -> {
+                val list = intent?.getStringExtra(EXTRA_ITEMS)?.let { json ->
+                    runCatching {
+                        val arr = org.json.JSONArray(json)
+                        (0 until arr.length()).map { PlaylistItem.fromJson(arr.getJSONObject(it)) }
+                    }.getOrNull()
+                }.orEmpty()
+                enqueue(list, next = action == ACTION_PLAY_NEXT)
+                if (list.isNotEmpty() && currentItem != null) {
+                    Toast.makeText(
+                        this, if (action == ACTION_PLAY_NEXT) "次に再生します" else "再生キューに追加しました", Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }
             // 一時停止中の通知をスワイプで消した：画面で見ていなければ終了する
             ACTION_DISMISS -> if (!videoUiAttached && !player.isPlaying) stopPlayback()
         }
@@ -243,6 +257,7 @@ class PlaybackService : Service() {
     }
 
     override fun onDestroy() {
+        hasQueue = false
         popup?.dismiss()
         savePosition()
         // OS に止められた場合も、押しても何も起きない通知を残さない
@@ -362,6 +377,7 @@ class PlaybackService : Service() {
         items = newItems
         index = startIndex
         shuffle = shuffled
+        hasQueue = true
         buildOrder()
         ensureEngineUpToDate()
         // 画面から切り離されても動き続けるように「開始済み」のサービスにしておく
@@ -514,6 +530,7 @@ class PlaybackService : Service() {
         items = emptyList()
         order = emptyList()
         index = 0
+        hasQueue = false
         lengthMs = 0
         meta = null
         cancelSleepTimer()
@@ -545,6 +562,41 @@ class PlaybackService : Service() {
         orderPos = pos
         index = order[pos]
         playCurrent(startPositionOf(items[index]), false)
+    }
+
+    // ---------- 再生キューの編集 ----------
+
+    /** 再生キューに加える（[next] なら今の曲・動画の次に、そうでなければ最後に） */
+    fun enqueue(added: List<PlaylistItem>, next: Boolean) {
+        if (added.isEmpty() || currentItem == null) return
+        val start = items.size
+        items = items + added
+        val newIdx = added.indices.map { start + it }
+        order = if (next) order.take(orderPos + 1) + newIdx + order.drop(orderPos + 1) else order + newIdx
+        queueChanged()
+    }
+
+    /** 再生キューから外す（今再生しているものは外せない） */
+    fun removeFromQueue(pos: Int) {
+        if (pos !in order.indices || pos == orderPos) return
+        val removed = order[pos]
+        items = items.filterIndexed { i, _ -> i != removed }
+        order = order.filterIndexed { p, _ -> p != pos }.map { if (it > removed) it - 1 else it }
+        if (index > removed) index--
+        queueChanged()
+    }
+
+    /** 再生キューの順番を入れ替える */
+    fun moveInQueue(from: Int, to: Int) {
+        if (from !in order.indices || to !in order.indices || from == to) return
+        order = order.toMutableList().apply { add(to, removeAt(from)) }
+        queueChanged()
+    }
+
+    private fun queueChanged() {
+        orderPos = order.indexOf(index).coerceAtLeast(0)
+        LastSession.save(this, items, index, shuffle)
+        dispatch { it.onModesChanged() }
     }
 
     fun hasNext() = orderPos < order.lastIndex || (repeat == Repeat.ALL && items.size > 1)
@@ -1222,6 +1274,26 @@ class PlaybackService : Service() {
         private const val IDLE_STOP_MS = 30 * 60_000L
         private const val CHANNEL_ID = "playback"
         private const val NOTIFICATION_ID = 1
+        const val ACTION_ENQUEUE = "com.ryose.videoplayer.ENQUEUE"
+        const val ACTION_PLAY_NEXT = "com.ryose.videoplayer.PLAY_NEXT"
+        const val EXTRA_ITEMS = "items"
+
+        /** 再生キューがあるか（一覧の「次に再生」「キューに追加」を出すかどうかに使う） */
+        @Volatile
+        var hasQueue = false
+            private set
+
+        /** 一覧の画面から、再生中のキューに加える */
+        fun enqueueFrom(context: Context, added: List<PlaylistItem>, next: Boolean) {
+            val arr = org.json.JSONArray()
+            added.forEach { arr.put(it.toJson()) }
+            context.startService(
+                Intent(context, PlaybackService::class.java)
+                    .setAction(if (next) ACTION_PLAY_NEXT else ACTION_ENQUEUE)
+                    .putExtra(EXTRA_ITEMS, arr.toString())
+            )
+        }
+
         const val ACTION_PLAY_PAUSE = "com.ryose.videoplayer.PLAY_PAUSE"
         const val ACTION_PLAY = "com.ryose.videoplayer.PLAY"
         const val ACTION_NEXT = "com.ryose.videoplayer.NEXT"

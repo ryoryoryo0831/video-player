@@ -140,6 +140,11 @@ abstract class BaseListFragment : Fragment(R.layout.fragment_list) {
                 onFavoritesChanged()
             }
             actions += SheetItem(R.drawable.ic_playlist_add, "プレイリストに追加") { PlaylistDialogs.addToPlaylist(ctx, listOf(item)) }
+            // 何かを再生中なら、そのキューに加えられる
+            if (PlaybackService.hasQueue) {
+                actions += SheetItem(R.drawable.ic_skip_next, "次に再生") { PlaybackService.enqueueFrom(ctx, listOf(item), next = true) }
+                actions += SheetItem(R.drawable.ic_queue, "再生キューに追加") { PlaybackService.enqueueFrom(ctx, listOf(item), next = false) }
+            }
         }
         actions += extraActions(row)
         if (row is Row.Media && FileActions.isLocal(row.item)) {

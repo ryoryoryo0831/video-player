@@ -24,6 +24,8 @@ sealed class Row {
         val dir: File? = null,
         val id: String? = null,
         val isStorage: Boolean = false,
+        /** ジャケット画像を出すときの曲のファイル（アルバム・アーティストの行） */
+        val art: String? = null,
     ) : Row()
 
     /** 動画の行 */
@@ -100,6 +102,34 @@ class MediaAdapter(
 
     class FolderHolder(view: View) : RecyclerView.ViewHolder(view) {
         val icon: ImageView = view.findViewById(R.id.icon)
+        private val iconPadding = icon.paddingLeft
+        private val iconTint = icon.imageTintList
+
+        /** いつもの丸いアイコン */
+        fun showIcon(res: Int) {
+            icon.dispose()
+            icon.imageTintList = iconTint
+            icon.setPadding(iconPadding, iconPadding, iconPadding, iconPadding)
+            icon.scaleType = ImageView.ScaleType.FIT_CENTER
+            icon.clipToOutline = false
+            icon.setImageResource(res)
+        }
+
+        /** ジャケット画像（無ければいつものアイコン） */
+        fun showArt(path: String, fallbackRes: Int) {
+            showIcon(fallbackRes)
+            icon.load(AudioArt(path)) {
+                listener(
+                    onSuccess = { _, _ ->
+                        icon.imageTintList = null
+                        icon.setPadding(0, 0, 0, 0)
+                        icon.scaleType = ImageView.ScaleType.CENTER_CROP
+                        icon.clipToOutline = true
+                    },
+                    onError = { _, _ -> showIcon(fallbackRes) },
+                )
+            }
+        }
         val name: TextView = view.findViewById(R.id.name)
         val info: TextView = view.findViewById(R.id.info)
     }
@@ -172,7 +202,8 @@ class MediaAdapter(
             }
             is Row.Folder -> {
                 holder as FolderHolder
-                holder.icon.setImageResource(row.icon)
+                val art = row.art
+                if (art != null) holder.showArt(art, row.icon) else holder.showIcon(row.icon)
                 holder.name.text = row.name
                 holder.info.text = row.info
                 holder.info.visibility = if (row.info.isEmpty()) View.GONE else View.VISIBLE
