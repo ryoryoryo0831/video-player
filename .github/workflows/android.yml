@@ -46,6 +46,12 @@ jobs:
       - name: テスト
         run: gradle testReleaseUnitTest --no-daemon
 
+      - name: 品質チェック（Android Lint）
+        continue-on-error: true
+        run: |
+          gradle lintRelease --no-daemon
+          cat app/build/reports/lint.txt
+
       - name: APK をビルド
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}

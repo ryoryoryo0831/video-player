@@ -73,6 +73,10 @@ android {
     }
     lint {
         checkReleaseBuilds = false
+        // 品質チェックの結果は CI のログに出す（いまは見つかってもビルドは止めない）
+        abortOnError = false
+        textReport = true
+        textOutput = file("build/reports/lint.txt")
     }
     testOptions {
         // テストでは Android の部品は使わない（呼ばれても既定値を返す）
